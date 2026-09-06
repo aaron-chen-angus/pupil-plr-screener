@@ -243,6 +243,7 @@ let overlayEl;
 let cueEl;
 let statusEl;
 let readyEl;
+let hintEl;
 let gateListEl;
 let torchLiveEl;
 
@@ -271,6 +272,10 @@ function buildCapture() {
     el("span", {}, ["Not ready"]),
   ]);
   stage.appendChild(readyEl);
+
+  // "Why isn't it ready?" hint — names the first failing check + a tip.
+  hintEl = el("div", { class: "ready-hint" }, [""]);
+  stage.appendChild(hintEl);
 
   const controls = el("div", { class: "capture-controls" }, [
     el("button", { class: "btn secondary", onclick: () => abortCapture() }, ["Stop"]),
@@ -351,20 +356,62 @@ function renderProtocolState(state) {
   torchLiveEl.textContent = on ? "LED ON" : "LED off";
 
   const c = state.gate?.checks;
+  const pupil = state.gate?.pupil;
   if (c) {
+    // Live diagnostics so it's transparent what the CV is measuring.
+    const focusTxt = pupil ? ` ${pupil.focus.toFixed(2)}` : "";
+    const ratioTxt =
+      pupil && isFinite(pupil.ratio) ? ` ${(pupil.ratio * 100) | 0}%` : "";
     const items = [
       ["Face", c.faceDetected],
       ["Eye", c.oneEyeTargeted],
       ["Centered", c.centered],
       ["Open", c.open],
-      ["Focus", c.inFocus],
-      ["Pupil", c.pupilFound],
+      [`Focus${focusTxt}`, c.inFocus],
+      [`Pupil${ratioTxt}`, c.pupilFound],
     ];
     gateListEl.innerHTML = "";
     for (const [label, pass] of items) {
       gateListEl.appendChild(el("div", { class: `g ${pass ? "pass" : "fail"}` }, [label]));
     }
   }
+
+  updateReadyHint(state, c, ready);
+}
+
+// Show a plain-language "why isn't it ready?" hint that names the first failing
+// check (in priority order) and gives an actionable tip. Only during the
+// positioning phases; hidden once ready or while a measurement is running.
+function updateReadyHint(state, checks, ready) {
+  const positioning = state.phase === "prompt" || state.phase === "gating";
+  if (!positioning || ready || !checks) {
+    hintEl.textContent = "";
+    hintEl.classList.remove("show");
+    return;
+  }
+
+  const eye = state.targetEye ? `${state.targetEye} eye` : "eye";
+  let msg = "";
+  if (!checks.faceDetected) {
+    msg = "No face detected — bring the phone closer and frame the eyes.";
+  } else if (!checks.oneEyeTargeted) {
+    msg = `Can't find the ${eye} — aim the camera at it.`;
+  } else if (!checks.centered) {
+    msg = `Move the ${eye} into the centre circle.`;
+  } else if (!checks.open) {
+    msg = "Eye looks closed or mid-blink — hold it open.";
+  } else if (!checks.inFocus) {
+    msg =
+      "Not sharp enough — steady the phone and adjust distance until the eye is crisp.";
+  } else if (!checks.pupilFound) {
+    msg =
+      "Can't isolate the pupil — improve lighting, reduce glare/reflections, and hold steady.";
+  } else {
+    msg = "Almost there — hold steady.";
+  }
+
+  hintEl.textContent = "Why not ready: " + msg;
+  hintEl.classList.add("show");
 }
 
 function drawOverlay(f) {

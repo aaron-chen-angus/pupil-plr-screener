@@ -13,7 +13,19 @@ export function detectCapabilities() {
   const speechSupported = "speechSynthesis" in window;
 
   const supported = navigator.mediaDevices?.getSupportedConstraints?.();
-  const torchSupported = !!(supported && supported.torch);
+  const constraintTorch = !!(supported && supported.torch);
+
+  // Detect iOS / iPadOS (incl. iPadOS reporting as Mac with touch). iOS Safari
+  // and ALL iOS browsers (they use WebKit) cannot control the torch from the
+  // web, regardless of what getSupportedConstraints() claims.
+  const ua = navigator.userAgent || "";
+  const isIOS =
+    /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.platform === "MacIntel" && (navigator.maxTouchPoints ?? 0) > 1);
+
+  // Torch is only plausibly controllable off iOS AND when the constraint is
+  // advertised. The definitive answer still comes from the live track.
+  const torchSupported = constraintTorch && !isIOS;
 
   let reason = "";
   if (!secureContext) {
@@ -22,9 +34,12 @@ export function detectCapabilities() {
   } else if (!hasGetUserMedia) {
     reason =
       "This browser does not expose getUserMedia; camera access is unavailable.";
+  } else if (isIOS) {
+    reason =
+      "This is an iPhone/iPad. iOS browsers cannot control the camera LED from the web, so a real light stimulus can't be delivered. Use demo mode here, or an Android Chrome phone for a real screening.";
   } else if (!torchSupported) {
     reason =
-      "This browser/device does not report torch (LED) control. iOS Safari does not support it. You can run demo mode without a controlled stimulus.";
+      "This browser/device does not report torch (LED) control. You can run demo mode without a controlled stimulus.";
   }
 
   const canRunControlledTest =
@@ -35,6 +50,7 @@ export function detectCapabilities() {
     hasGetUserMedia,
     torchSupported,
     speechSupported,
+    isIOS,
     canRunControlledTest,
     reason,
   };

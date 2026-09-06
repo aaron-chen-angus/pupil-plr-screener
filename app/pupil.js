@@ -1,11 +1,22 @@
 /**
  * Pupil segmentation within the iris ROI.
  *
- * FaceMesh localises the IRIS, not the pupil. Under the controlled LED
- * illumination the pupil is the darkest connected region near the iris centre.
- * We threshold the ROI, reject the bright corneal glint, keep the dark blob
- * closest to the iris centre, and estimate the pupil's diameter. The iris
- * diameter (~11.7 mm) converts pixels to millimetres.
+ * FaceMesh localises the IRIS, not the pupil. The pupil is (usually) the
+ * darkest region near the iris centre. Real phone captures put a bright
+ * corneal glint (specular reflection of the light source) right on top of the
+ * pupil, which visually SPLITS the dark pupil into pieces. Naively removing
+ * bright pixels therefore punches a hole in the pupil and shrinks the measured
+ * blob below the size sanity-check.
+ *
+ * To be robust we:
+ *   1. Build a "dark" mask, then morphologically CLOSE it so glint pixels that
+ *      are enclosed by / adjacent to dark pupil pixels are absorbed back in.
+ *   2. Flood-fill the closed mask to find the dark blob nearest the iris centre.
+ *   3. Estimate diameter primarily from the blob's bounding box (which still
+ *      spans the full pupil even if the interior had a glint), cross-checked
+ *      against equivalent-area diameter.
+ *
+ * The iris diameter (~11.7 mm) converts pixels to millimetres.
  */
 
 const roiCanvas = document.createElement("canvas");
@@ -42,37 +53,71 @@ export function measurePupil(video, iris) {
     lum[i] = y;
     if (y < min) min = y;
     if (y > max) max = y;
-    if (y > 240) saturated++;
+    if (y > 235) saturated++;
   }
   const glintFraction = saturated / n;
 
   const focus = focusScore(lum, rw, rh);
   const thr = darkThreshold(min, max);
+  const glintThr = Math.max(200, min + (max - min) * 0.75);
+
+  // --- build dark + glint masks ---
+  // dark[i] = 1 for pupil-candidate dark pixels; glint[i] = 1 for very bright
+  // specular pixels (candidate to be absorbed into the pupil during closing).
+  const dark = new Uint8Array(n);
+  const glint = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (lum[i] <= thr) dark[i] = 1;
+    else if (lum[i] >= glintThr) glint[i] = 1;
+  }
+
+  // --- morphological close: absorb glint pixels that are near dark pixels ---
+  // A glint pixel becomes "dark" if it has a dark neighbour within a small
+  // radius. Repeating a couple of times bridges the specular blob on the pupil.
+  const closeRadius = 2;
+  for (let pass = 0; pass < closeRadius; pass++) {
+    let changed = false;
+    for (let y = 0; y < rh; y++) {
+      for (let x = 0; x < rw; x++) {
+        const i = y * rw + x;
+        if (dark[i] || !glint[i]) continue;
+        // 8-neighbour check for an adjacent dark pixel.
+        let touch = false;
+        for (let dy = -1; dy <= 1 && !touch; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= rw || ny >= rh) continue;
+            if (dark[ny * rw + nx]) {
+              touch = true;
+              break;
+            }
+          }
+        }
+        if (touch) {
+          dark[i] = 1;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
 
   const cxLocal = (centerPx.x - roi.x) * scale;
   const cyLocal = (centerPx.y - roi.y) * scale;
+  const irisRadiusLocal = (irisPx * scale) / 2;
 
+  // --- connected-component search over the closed dark mask ---
   const label = new Int32Array(n).fill(-1);
   let bestArea = 0;
-  let best = {
-    cx: 0,
-    cy: 0,
-    count: 0,
-    sumX: 0,
-    sumY: 0,
-    minX: 0,
-    maxX: 0,
-    minY: 0,
-    maxY: 0,
-  };
+  let best = { count: 0, minX: 0, maxX: 0, minY: 0, maxY: 0 };
   let bestDist = Infinity;
-
   const stack = [];
-  const irisRadiusLocal = (irisPx * scale) / 2;
 
   for (let start = 0; start < n; start++) {
     if (label[start] !== -1) continue;
-    if (lum[start] > thr) {
+    if (!dark[start]) {
       label[start] = 0;
       continue;
     }
@@ -106,7 +151,7 @@ export function measurePupil(video, iris) {
       for (const q of neigh) {
         if (q < 0) continue;
         if (label[q] !== -1) continue;
-        if (lum[q] > thr) {
+        if (!dark[q]) {
           label[q] = 0;
           continue;
         }
@@ -118,8 +163,9 @@ export function measurePupil(video, iris) {
     const bcx = sumX / count;
     const bcy = sumY / count;
     const distToCenter = Math.hypot(bcx - cxLocal, bcy - cyLocal);
-    if (distToCenter > irisRadiusLocal * 1.1) continue;
-    if (count < 6) continue;
+    // Blob centroid must be inside the iris and a plausible pupil size.
+    if (distToCenter > irisRadiusLocal * 1.2) continue;
+    if (count < 4) continue;
 
     if (
       distToCenter < bestDist - 0.5 ||
@@ -127,31 +173,48 @@ export function measurePupil(video, iris) {
     ) {
       bestDist = distToCenter;
       bestArea = count;
-      best = { cx: bcx, cy: bcy, count, sumX, sumY, minX, maxX, minY, maxY };
+      best = { count, minX, maxX, minY, maxY };
     }
   }
 
-  if (best.count < 6) {
+  if (best.count < 4) {
     return { diameterPx: NaN, focus, ok: false, glintFraction };
   }
 
+  // Diameter: bounding box captures the full pupil extent (robust to an
+  // interior glint hole); area diameter is a lower-bound cross-check.
+  const bboxW = best.maxX - best.minX + 1;
+  const bboxH = best.maxY - best.minY + 1;
+  const bboxDia = (bboxW + bboxH) / 2;
   const areaDia = 2 * Math.sqrt(best.count / Math.PI);
-  const bboxDia =
-    (best.maxX - best.minX + 1 + (best.maxY - best.minY + 1)) / 2;
-  const diaLocal = 0.5 * areaDia + 0.5 * bboxDia;
+  // Trust the bounding box more, since glint holes deflate the area.
+  const diaLocal = 0.7 * bboxDia + 0.3 * areaDia;
 
   const diameterPx = diaLocal / scale;
-  const ok = diameterPx > 0.15 * irisPx && diameterPx < 0.95 * irisPx;
 
-  return { diameterPx, focus, ok, glintFraction };
+  // Relaxed size sanity: a real pupil is roughly 8%..98% of the iris width.
+  // (In bright light the pupil can be quite small; the iris-width scale can
+  // also be a little off when the eye is slightly off-axis.)
+  const ratio = diameterPx / irisPx;
+  const ok = ratio > 0.08 && ratio < 0.98 && isFinite(diameterPx);
+
+  return { diameterPx, focus, ok, glintFraction, ratio };
 }
 
 function darkThreshold(min, max) {
   const range = max - min;
-  if (range < 12) return min + 6;
-  return min + range * 0.32;
+  if (range < 10) return min + 5;
+  // Bias toward the darker end; the pupil is the darkest structure present.
+  return min + range * 0.38;
 }
 
+/**
+ * Tenengrad focus measure normalized to ~0..1.
+ *
+ * The normalization constant was recalibrated for real phone eye ROIs: a
+ * comfortably in-focus close-up produces far less average gradient energy than
+ * the old /1500 assumed, which made every real frame read as "out of focus".
+ */
 function focusScore(lum, w, h) {
   let sum = 0;
   let count = 0;
@@ -166,5 +229,6 @@ function focusScore(lum, w, h) {
   }
   if (!count) return 0;
   const mean = sum / count;
-  return Math.max(0, Math.min(1, mean / 1500));
+  // Soft knee: ~120 mean gradient-energy maps to ~1.0.
+  return Math.max(0, Math.min(1, mean / 120));
 }

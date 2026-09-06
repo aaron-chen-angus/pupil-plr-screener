@@ -5,9 +5,9 @@
  */
 
 export const DEFAULT_GATE = {
-  minEar: 0.18,
-  minFocus: 0.25,
-  maxCenterOffset: 0.28,
+  minEar: 0.15,
+  minFocus: 0.12,
+  maxCenterOffset: 0.34,
 };
 
 export function evaluateGate(reading, target, measurePupil, frame, thr = DEFAULT_GATE) {
