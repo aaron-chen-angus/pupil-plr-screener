@@ -29,6 +29,8 @@ export class ProtocolEngine {
     this.phaseStart = 0;
     this.ledOnsetTs = 0;
     this.gateReadySince = 0;
+    this.triggerRequested = false;
+    this.countdownTimers = [];
     this.queue = [];
     this.repeatCounters = new Map();
     this.collectedByEye = new Map();
@@ -64,7 +66,18 @@ export class ProtocolEngine {
     this.running = false;
     cancelAnimationFrame(this.raf);
     void this.camera.setTorch(false);
+    this.clearCountdown();
     this.voice.cancel();
+  }
+
+  /**
+   * Operator-initiated start of a measurement window (manualStart mode).
+   * Only honoured while gating and the CV gate is ready; ignored otherwise.
+   */
+  requestTrigger() {
+    if (this.state.phase === "gating") {
+      this.triggerRequested = true;
+    }
   }
 
   setPhase(phase, durationMs = 0, message = "") {
@@ -102,9 +115,62 @@ export class ProtocolEngine {
     this.samples = [];
     this.framesDropped = 0;
     this.setPhase("baseline", this.config.baselineMs, "Measuring baseline (dark)");
+    this.scheduleCountdown();
+  }
+
+  /**
+   * Spoken countdown during the baseline (dark) phase so the operator knows
+   * exactly when the stimulus fires — especially useful in external-light mode
+   * where they must shine a hand-held torch on cue. The "1" is timed to land
+   * right at stimulus onset. All cues are cancellable (blink / stop / retest).
+   */
+  scheduleCountdown() {
+    this.clearCountdown();
+    if (!this.config.voice) return;
+
+    const dur = this.config.baselineMs;
+    this.voice.say("Baseline.");
+
+    // Speak "3", "2", "1" so that "1" finishes ~at the end of the baseline.
+    // Fall back gracefully if the baseline is very short.
+    const cues = [
+      { t: dur - 2400, word: "3" },
+      { t: dur - 1600, word: "2" },
+      { t: dur - 800, word: "1" },
+    ];
+    for (const c of cues) {
+      if (c.t < 250) continue; // skip cues that would overlap "Baseline."
+      const id = window.setTimeout(() => {
+        if (this.running && this.state.phase === "baseline") {
+          this.voice.say(c.word);
+        }
+      }, c.t);
+      this.countdownTimers.push(id);
+    }
+  }
+
+  clearCountdown() {
+    for (const id of this.countdownTimers) window.clearTimeout(id);
+    this.countdownTimers = [];
   }
 
   async fireStimulus() {
+    if (this.config.externalLight) {
+      // External hand-held torch mode: the APP still owns the timing and tells
+      // the operator exactly when to shine the light. This is an UNCONTROLLED
+      // manual stimulus (intensity/onset precision are operator-dependent) and
+      // is flagged as a quality caveat — it is not the same as the LED-fired
+      // controlled stimulus. We do NOT touch the camera torch here.
+      this.ledOnsetTs = performance.now();
+      this.voice.say("Shine the light on the eye now.");
+      this.setPhase(
+        "stimulus",
+        this.config.stimulusMs,
+        "SHINE LIGHT NOW (manual) — measuring"
+      );
+      return;
+    }
+
     const applied = await this.camera.setTorch(true);
     if (!applied && !this.config.demoMode) {
       this.state.message =
@@ -159,7 +225,18 @@ export class ProtocolEngine {
         break;
 
       case "gating": {
-        if (gate?.ready) {
+        if (this.config.manualStart) {
+          // Operator (hands busy holding a torch) starts the window by tapping
+          // "Capture now" or saying the wake word. We still require the gate to
+          // be ready first, so the eye is verified before measuring.
+          this.state.message = gate?.ready
+            ? "Ready — say \u201cgo\u201d or tap Capture now"
+            : "Center the eye and hold steady";
+          if (gate?.ready && this.triggerRequested) {
+            this.triggerRequested = false;
+            this.beginWindow();
+          }
+        } else if (gate?.ready) {
           if (!this.gateReadySince) this.gateReadySince = now;
           const held = now - this.gateReadySince;
           if (held >= GATE_HOLD_MS) {
@@ -179,6 +256,7 @@ export class ProtocolEngine {
           break;
         }
         if (this.state.phaseElapsedMs >= this.state.phaseDurationMs) {
+          this.clearCountdown();
           void this.fireStimulus();
         }
         break;
@@ -192,12 +270,21 @@ export class ProtocolEngine {
           break;
         }
         if (this.state.phaseElapsedMs >= this.state.phaseDurationMs) {
-          void this.camera.setTorch(false);
-          this.setPhase(
-            "redilation",
-            this.config.redilationMs,
-            "LED off — measuring recovery"
-          );
+          if (this.config.externalLight) {
+            this.voice.say("Light off.");
+            this.setPhase(
+              "redilation",
+              this.config.redilationMs,
+              "Light off (manual) — measuring recovery"
+            );
+          } else {
+            void this.camera.setTorch(false);
+            this.setPhase(
+              "redilation",
+              this.config.redilationMs,
+              "LED off — measuring recovery"
+            );
+          }
         }
         break;
       }
@@ -255,6 +342,7 @@ export class ProtocolEngine {
   }
 
   retestOrAdvance() {
+    this.clearCountdown();
     this.retests++;
     if (this.retests <= MAX_RETESTS) {
       this.voice.say("Blink detected. Let's retest this eye.");
@@ -298,6 +386,7 @@ export class ProtocolEngine {
     this.running = false;
     cancelAnimationFrame(this.raf);
     void this.camera.setTorch(false);
+    this.clearCountdown();
     this.setPhase("done", 0, "Session complete");
     this.voice.say("Screening complete.");
     this.cb.onComplete();

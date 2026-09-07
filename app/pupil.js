@@ -41,32 +41,57 @@ export function measurePupil(video, iris) {
   const data = img.data;
   const n = rw * rh;
 
+  // Iris centre & radius in ROI-local (scaled) coordinates. We restrict ALL
+  // pupil analysis to a disc slightly inside the iris. This is the key guard
+  // against the pupil blob "leaking" into eyelashes / socket shadow at close
+  // range (which previously produced impossible sizes like 224% of the iris).
+  const cxLocal = (centerPx.x - roi.x) * scale;
+  const cyLocal = (centerPx.y - roi.y) * scale;
+  const irisRadiusLocal = (irisPx * scale) / 2;
+  // Pupil can never exceed the iris, so only consider pixels within the iris
+  // disc (a hair of margin for landmark noise).
+  const searchRadius = irisRadiusLocal * 0.98;
+
+  const inIris = new Uint8Array(n);
   const lum = new Float32Array(n);
   let min = 255;
   let max = 0;
   let saturated = 0;
-  for (let i = 0; i < n; i++) {
-    const r = data[i * 4];
-    const g = data[i * 4 + 1];
-    const b = data[i * 4 + 2];
-    const y = 0.299 * r + 0.587 * g + 0.114 * b;
-    lum[i] = y;
-    if (y < min) min = y;
-    if (y > max) max = y;
-    if (y > 235) saturated++;
+  let irisPixels = 0;
+  for (let y = 0; y < rh; y++) {
+    for (let x = 0; x < rw; x++) {
+      const i = y * rw + x;
+      const r = data[i * 4];
+      const g = data[i * 4 + 1];
+      const b = data[i * 4 + 2];
+      const yl = 0.299 * r + 0.587 * g + 0.114 * b;
+      lum[i] = yl;
+      const inside =
+        (x - cxLocal) * (x - cxLocal) + (y - cyLocal) * (y - cyLocal) <=
+        searchRadius * searchRadius;
+      if (inside) {
+        inIris[i] = 1;
+        irisPixels++;
+        if (yl < min) min = yl;
+        if (yl > max) max = yl;
+        if (yl > 235) saturated++;
+      }
+    }
   }
-  const glintFraction = saturated / n;
+  if (irisPixels < 12) {
+    return { diameterPx: NaN, focus: focusScore(lum, rw, rh), ok: false, glintFraction: 0 };
+  }
+  const glintFraction = saturated / irisPixels;
 
   const focus = focusScore(lum, rw, rh);
   const thr = darkThreshold(min, max);
   const glintThr = Math.max(200, min + (max - min) * 0.75);
 
-  // --- build dark + glint masks ---
-  // dark[i] = 1 for pupil-candidate dark pixels; glint[i] = 1 for very bright
-  // specular pixels (candidate to be absorbed into the pupil during closing).
+  // --- build dark + glint masks (only inside the iris disc) ---
   const dark = new Uint8Array(n);
   const glint = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
+    if (!inIris[i]) continue;
     if (lum[i] <= thr) dark[i] = 1;
     else if (lum[i] >= glintThr) glint[i] = 1;
   }
@@ -103,10 +128,6 @@ export function measurePupil(video, iris) {
     }
     if (!changed) break;
   }
-
-  const cxLocal = (centerPx.x - roi.x) * scale;
-  const cyLocal = (centerPx.y - roi.y) * scale;
-  const irisRadiusLocal = (irisPx * scale) / 2;
 
   // --- connected-component search over the closed dark mask ---
   const label = new Int32Array(n).fill(-1);

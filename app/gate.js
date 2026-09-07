@@ -44,6 +44,13 @@ export function evaluateGate(reading, target, measurePupil, frame, thr = DEFAULT
 
   checks.open = iris.ear >= thr.minEar;
 
+  // Distance diagnostic: how much of the frame the iris fills. Too large means
+  // the camera is far too close (a macro single-eye shot), which breaks the
+  // scale reference and pupil segmentation. Too small means it's too far away.
+  const irisFrac = iris.diameterPx / minDim;
+  const tooClose = irisFrac > 0.35;
+  const tooFar = irisFrac < 0.03;
+
   const pupil = measurePupil(iris);
   checks.pupilFound = pupil.ok;
   checks.inFocus = pupil.focus >= thr.minFocus;
@@ -56,5 +63,5 @@ export function evaluateGate(reading, target, measurePupil, frame, thr = DEFAULT
     checks.inFocus &&
     checks.pupilFound;
 
-  return { ready, checks, iris, pupil };
+  return { ready, checks, iris, pupil, tooClose, tooFar };
 }

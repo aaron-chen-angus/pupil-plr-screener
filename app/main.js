@@ -7,6 +7,7 @@ import { computeAsymmetry } from "./metrics.js";
 import { drawPlot, PLOT_COLORS } from "./plot.js";
 import { exportCSV, exportJSON } from "./export.js";
 import { el, disclaimerBanner } from "./ui.js";
+import { WakeListener } from "./listen.js";
 import { APP_VERSION } from "./config.js";
 
 const app = document.getElementById("app");
@@ -22,6 +23,12 @@ const config = {
   asymmetryThreshold: 20, // conservative, UNVALIDATED default
   voice: caps.speechSupported,
   demoMode: false,
+  // External hand-held torch mode: operator shines a real light on cue. The
+  // app owns timing but the stimulus is UNCONTROLLED (quality caveat).
+  externalLight: false,
+  // Operator triggers the measurement window (tap / voice) instead of the app
+  // auto-starting when the gate is ready. Auto-enabled with externalLight.
+  manualStart: false,
 };
 
 // --- runtime state ---
@@ -29,6 +36,7 @@ let camera = null;
 let tracker = null;
 let engine = null;
 let voice = null;
+let listener = null;
 let openResult = null;
 const eyeResults = { left: null, right: null };
 
@@ -104,10 +112,37 @@ function buildIntro() {
           class: "btn secondary",
           onclick: () => {
             config.demoMode = true;
+            config.externalLight = false;
+            config.manualStart = false;
             void startCapture();
           },
         },
-        ["Start demo mode (no controlled stimulus)"]
+        ["Start demo mode (no stimulus)"]
+      )
+    );
+    actions.appendChild(
+      el("div", { class: "card" }, [
+        el("p", { class: "muted" }, [
+          "External-light demo: hold a small torch in your other hand. The app tells you exactly when to shine it and when to switch it off, and measures the pupil response. This is an UNCONTROLLED manual stimulus (a quality caveat) — not the same as the phone's own LED and not pupillometer-grade.",
+        ]),
+      ])
+    );
+    actions.appendChild(
+      el(
+        "button",
+        {
+          class: "btn secondary",
+          onclick: () => {
+            config.demoMode = true;
+            config.externalLight = true;
+            config.manualStart = true;
+            // Longer baseline so the spoken "3, 2, 1" countdown fits and the
+            // operator has time to ready the hand-held torch.
+            config.baselineMs = 3500;
+            void startCapture();
+          },
+        },
+        ["Start external-light demo (hold a torch)"]
       )
     );
   } else {
@@ -246,6 +281,7 @@ let readyEl;
 let hintEl;
 let gateListEl;
 let torchLiveEl;
+let captureNowBtn;
 
 function buildCapture() {
   const s = screen("capture");
@@ -277,9 +313,19 @@ function buildCapture() {
   hintEl = el("div", { class: "ready-hint" }, [""]);
   stage.appendChild(hintEl);
 
-  const controls = el("div", { class: "capture-controls" }, [
-    el("button", { class: "btn secondary", onclick: () => abortCapture() }, ["Stop"]),
-  ]);
+  const captureBtns = [];
+  if (config.manualStart) {
+    captureNowBtn = el(
+      "button",
+      { class: "btn primary", onclick: () => engine?.requestTrigger() },
+      ["Capture now"]
+    );
+    captureBtns.push(captureNowBtn);
+  }
+  captureBtns.push(
+    el("button", { class: "btn secondary", onclick: () => abortCapture() }, ["Stop"])
+  );
+  const controls = el("div", { class: "capture-controls" }, captureBtns);
   stage.appendChild(controls);
 
   s.appendChild(stage);
@@ -341,6 +387,22 @@ async function startCapture() {
     },
     onComplete: () => finishSession(),
   });
+
+  // Voice-activated trigger for hands-busy (external-light) operation.
+  if (config.manualStart) {
+    listener = new WakeListener(() => engine?.requestTrigger());
+    if (listener.isSupported) {
+      listener.start();
+      statusEl.textContent =
+        statusEl.textContent +
+        "  Say \u201cgo\u201d or tap Capture now to start each measurement.";
+    } else {
+      statusEl.textContent =
+        statusEl.textContent +
+        "  Voice trigger not supported here — tap Capture now to start each measurement.";
+    }
+  }
+
   engine.start();
 }
 
@@ -354,6 +416,13 @@ function renderProtocolState(state) {
   const on = state.torchOn;
   torchLiveEl.classList.toggle("on", on);
   torchLiveEl.textContent = on ? "LED ON" : "LED off";
+
+  // In manual/external mode, "Capture now" only works while gating + ready.
+  if (captureNowBtn) {
+    const armable = state.phase === "gating" && ready;
+    captureNowBtn.disabled = !armable;
+    captureNowBtn.textContent = armable ? "Capture now" : "Capture now (align eye first)";
+  }
 
   const c = state.gate?.checks;
   const pupil = state.gate?.pupil;
@@ -390,12 +459,17 @@ function updateReadyHint(state, checks, ready) {
     return;
   }
 
+  const gate = state.gate;
   const eye = state.targetEye ? `${state.targetEye} eye` : "eye";
   let msg = "";
   if (!checks.faceDetected) {
-    msg = "No face detected — bring the phone closer and frame the eyes.";
+    msg = "No face detected — hold the phone ~30 cm away with the whole face in view.";
   } else if (!checks.oneEyeTargeted) {
     msg = `Can't find the ${eye} — aim the camera at it.`;
+  } else if (gate?.tooClose) {
+    msg = "Too close — move the phone back so the whole face fits in the frame.";
+  } else if (gate?.tooFar) {
+    msg = `Too far — move a little closer to the ${eye}.`;
   } else if (!checks.centered) {
     msg = `Move the ${eye} into the centre circle.`;
   } else if (!checks.open) {
@@ -405,7 +479,7 @@ function updateReadyHint(state, checks, ready) {
       "Not sharp enough — steady the phone and adjust distance until the eye is crisp.";
   } else if (!checks.pupilFound) {
     msg =
-      "Can't isolate the pupil — improve lighting, reduce glare/reflections, and hold steady.";
+      "Can't isolate the pupil — reduce glare/reflections, avoid extreme close-ups, and hold steady.";
   } else {
     msg = "Almost there — hold steady.";
   }
@@ -441,6 +515,8 @@ function drawOverlay(f) {
 }
 
 function abortCapture() {
+  listener?.stop();
+  listener = null;
   engine?.stop();
   tracker?.close();
   camera?.stop();
@@ -461,6 +537,8 @@ function finishSession() {
   eyeResults.left = agg.left;
   eyeResults.right = agg.right;
 
+  listener?.stop();
+  listener = null;
   tracker?.close();
   camera?.stop();
 
@@ -500,7 +578,13 @@ function buildQuality() {
 
   const notes = [];
   if (openResult) notes.push(...openResult.notes);
-  if (config.demoMode) notes.push("Demo mode: no controlled light stimulus delivered.");
+  if (config.externalLight) {
+    notes.push(
+      "External hand-held light: UNCONTROLLED manual stimulus (operator-timed intensity/onset). Illustrative only — not a controlled-LED measurement."
+    );
+  } else if (config.demoMode) {
+    notes.push("Demo mode: no controlled light stimulus delivered.");
+  }
 
   const anyEyeUnreliable = (l && !l.reliable) || (r && !r.reliable) || !l || !r;
   const unreliable =
