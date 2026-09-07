@@ -102,6 +102,7 @@ export class ProtocolEngine {
     }
     this.state.targetEye = next;
     this.state.repeatIndex = this.repeatCounters.get(next) ?? 0;
+    this.state.gate = null; // don't carry the previous eye's readiness over
     this.samples = [];
     this.framesDropped = 0;
     this.retests = 0;
@@ -204,16 +205,24 @@ export class ProtocolEngine {
     const reading = this.tracker.detect(this.video, now);
     const target = this.state.targetEye;
 
-    const gate =
-      target && reading.present
-        ? evaluateGate(
-            reading,
-            target,
-            (iris) => measurePupil(this.video, iris),
-            { w, h }
-          )
-        : null;
-    this.state.gate = gate;
+    // The render loop (~60fps) runs faster than the camera (~30fps), so on
+    // "stale frame" ticks the tracker returns present:false. Those ticks carry
+    // NO new information — we must NOT treat them as a not-ready result, or the
+    // gate-hold timer would keep resetting and the test could never start
+    // ("all green but never ready"). freshFrame tells the state machine whether
+    // this tick actually produced a new gate reading.
+    const freshFrame = reading.present === true;
+
+    if (freshFrame) {
+      this.state.gate = evaluateGate(
+        reading,
+        target,
+        (iris) => measurePupil(this.video, iris),
+        { w, h }
+      );
+    }
+    // On stale-frame ticks, keep the previous this.state.gate as-is.
+    const gate = this.state.gate;
 
     this.cb.onFrame?.({ iris: gate?.iris ?? null, gate, target });
 
@@ -243,17 +252,21 @@ export class ProtocolEngine {
             this.gateReadySince = 0;
             this.beginWindow();
           }
-        } else {
+        } else if (freshFrame) {
+          // Only reset the hold timer on a genuine (fresh) not-ready reading —
+          // never on stale-frame ticks that carry no new information.
           this.gateReadySince = 0;
         }
         break;
       }
 
       case "baseline": {
-        this.recordSample(gate, now);
-        if (this.detectBlink(gate)) {
-          this.retestOrAdvance("blink");
-          break;
+        if (freshFrame) {
+          this.recordSample(gate, now);
+          if (this.detectBlink(gate)) {
+            this.retestOrAdvance("blink");
+            break;
+          }
         }
         if (this.state.phaseElapsedMs >= this.state.phaseDurationMs) {
           this.clearCountdown();
@@ -263,11 +276,13 @@ export class ProtocolEngine {
       }
 
       case "stimulus": {
-        this.recordSample(gate, now);
-        if (this.detectBlink(gate)) {
-          void this.camera.setTorch(false);
-          this.retestOrAdvance("blink");
-          break;
+        if (freshFrame) {
+          this.recordSample(gate, now);
+          if (this.detectBlink(gate)) {
+            void this.camera.setTorch(false);
+            this.retestOrAdvance("blink");
+            break;
+          }
         }
         if (this.state.phaseElapsedMs >= this.state.phaseDurationMs) {
           if (this.config.externalLight) {
@@ -290,7 +305,7 @@ export class ProtocolEngine {
       }
 
       case "redilation": {
-        this.recordSample(gate, now);
+        if (freshFrame) this.recordSample(gate, now);
         if (this.state.phaseElapsedMs >= this.state.phaseDurationMs) {
           this.completeEye();
         }
