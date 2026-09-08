@@ -14,6 +14,11 @@ indicator.
 > asymmetry threshold is an **unvalidated** screening parameter, not a clinical cutoff. For
 > any clinical concern, refer to an ophthalmologist.
 
+> 📖 **Full reference manual:** see **[`DOCUMENTATION.md`](./DOCUMENTATION.md)** for the
+> detailed scientific and clinical basis (with peer-reviewed references), the complete technical
+> architecture and measurement pipeline, the mathematical metric definitions, and a comprehensive
+> **data dictionary** of every variable collected.
+
 ## What it does
 
 - Rear-camera capture with **app-controlled LED torch** timing (baseline dark → LED on →
