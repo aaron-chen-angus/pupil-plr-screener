@@ -38,6 +38,17 @@ export function exportCSV(result: SessionResult): void {
     )}`
   );
   rows.push("");
+
+  // Subject/demographic block. One field per row keeps it spreadsheet-friendly.
+  const subj = result.subject;
+  rows.push("section,field,value");
+  rows.push(`subject,name,${csv(subj.name)}`);
+  rows.push(
+    `subject,age,${subj.age === null || subj.age === undefined ? "" : subj.age}`
+  );
+  rows.push(`subject,gender,${csv(subj.gender)}`);
+  rows.push(`subject,testTakenAt,${csv(subj.testTakenAt)}`);
+  rows.push("");
   rows.push("section,eye,metric,value,unit");
 
   for (const side of ["left", "right"] as const) {
@@ -83,4 +94,13 @@ export function exportCSV(result: SessionResult): void {
 function fmt(v: number | null | undefined): string {
   if (v === null || v === undefined || !isFinite(v)) return "";
   return (Math.round(v * 1000) / 1000).toString();
+}
+
+// Escape a free-text value for a CSV cell: wrap in quotes and double any inner
+// quotes when it contains a comma, quote, or newline. Empty for null/undefined.
+function csv(v: string | number | null | undefined): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
 }

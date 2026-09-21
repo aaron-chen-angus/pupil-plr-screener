@@ -352,6 +352,7 @@ Exports are user-initiated (JSON / CSV).
 |---|---|---|---|
 | `createdAt` | ISO-8601 string | — | Timestamp the result was generated (device local clock, UTC ISO) |
 | `appVersion` | string | — | Application version (e.g., "1.0.0") |
+| `subject` | object | — | Optional subject/demographic details (`Subject`, §7.1.1) |
 | `config` | object | — | The `SessionConfig` used (see §7.4) |
 | `device.userAgent` | string | — | Browser user-agent string |
 | `device.torchSupported` | boolean | — | Whether the live camera track reported torch capability |
@@ -360,6 +361,22 @@ Exports are user-initiated (JSON / CSV).
 | `asymmetry` | object | — | Interocular summary (`AsymmetryResult`, §7.3) |
 | `quality` | object | — | Session quality flags (`SessionQuality`, §7.5) |
 | `stimulusDelivered` | boolean | — | **True only if a real controlled LED stimulus fired** (false in demo/external-light) |
+
+#### 7.1.1 Subject details (`Subject`)
+
+Optional demographic/identifying fields entered by the operator on the intro
+screen **before** starting a screening. They are recorded **on-device only**,
+included in the JSON/CSV export, and have **no effect** on any measurement or on
+the computer-vision pipeline. Any field may be left blank to keep the session
+anonymous. Because these fields can contain personal data, treat exported files
+accordingly (see §8) and obtain consent as appropriate.
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `name` | string | — | Subject full name (free text). Empty string if not provided |
+| `age` | number \| null | years | Subject age in whole years. `null` if not provided |
+| `gender` | string | — | One of `"female"`, `"male"`, `"other"`, `"prefer_not_to_say"`, or `""` (not provided) |
+| `testTakenAt` | ISO-8601 string \| null | — | Timestamp captured **when the operator started the test** (device local clock, UTC ISO). `null` if unset. Distinct from `createdAt`, which is stamped when the result is generated at the end of the run |
 
 ### 7.2 Per-eye metrics (`EyeMetrics`)
 

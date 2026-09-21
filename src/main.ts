@@ -7,8 +7,9 @@ import { Voice } from "./voice";
 import { computeAsymmetry } from "./metrics";
 import { drawPlot, PLOT_COLORS } from "./plot";
 import { exportCSV, exportJSON } from "./export";
+import { sendToSheets } from "./sheets";
 import { el, disclaimerBanner } from "./ui";
-import { APP_VERSION } from "./config";
+import { APP_VERSION, SHEETS_WEBAPP_URL } from "./config";
 import type {
   EyeMetrics,
   EyeSide,
@@ -41,6 +42,17 @@ let openResult: CameraOpenResult | null = null;
 const eyeResults: Record<EyeSide, EyeMetrics | null> = {
   left: null,
   right: null,
+};
+
+// Subject/demographic details collected before a screening. Stored on-device
+// and included in the exported session record. Purely optional identifying
+// fields — they do not affect any measurement or the CV pipeline. Age is held
+// as a string here to match the raw input value; it is coerced on export.
+const subject: { name: string; age: string; gender: string; testTakenAt: string } = {
+  name: "",
+  age: "",
+  gender: "",
+  testTakenAt: "",
 };
 
 // ---------- Brand header ----------
@@ -91,6 +103,8 @@ function buildIntro(): HTMLElement {
     ]),
   ]);
   s.appendChild(info);
+
+  s.appendChild(buildSubjectCard());
 
   // Capability-driven start options.
   const actions = el("div", { class: "pad" });
@@ -162,6 +176,57 @@ function capBadge(label: string, ok: boolean): HTMLElement {
       ok ? "available" : "unavailable",
     ]),
   ]);
+}
+
+// ---------- Subject details form ----------
+// Optional demographic fields recorded alongside the screening. Stored on-device
+// and included in the JSON/CSV export. They never influence the measurement.
+function buildSubjectCard(): HTMLElement {
+  const card = el("div", { class: "card" }, [
+    el("h2", {}, ["Subject details"]),
+    el("p", { class: "muted" }, [
+      "Optional. Recorded on-device with this session and included in the export. Leave blank to keep the session anonymous.",
+    ]),
+  ]);
+
+  const nameInput = el("input", {
+    type: "text",
+    placeholder: "Full name",
+    autocomplete: "off",
+    value: subject.name,
+    oninput: (e: Event) => (subject.name = (e.target as HTMLInputElement).value),
+  });
+  card.appendChild(field("Name", nameInput));
+
+  const ageInput = el("input", {
+    type: "number",
+    placeholder: "Years",
+    min: "0",
+    max: "120",
+    value: subject.age,
+    oninput: (e: Event) => (subject.age = (e.target as HTMLInputElement).value),
+  });
+  card.appendChild(field("Age", ageInput));
+
+  const genderSel = el("select", {
+    onchange: (e: Event) =>
+      (subject.gender = (e.target as HTMLSelectElement).value),
+  }) as HTMLSelectElement;
+  const genderOptions: [string, string][] = [
+    ["", "Select…"],
+    ["female", "Female"],
+    ["male", "Male"],
+    ["other", "Other"],
+    ["prefer_not_to_say", "Prefer not to say"],
+  ];
+  for (const [value, label] of genderOptions) {
+    const opt = el("option", { value }, [label]);
+    if (subject.gender === value) opt.setAttribute("selected", "selected");
+    genderSel.appendChild(opt);
+  }
+  card.appendChild(field("Gender", genderSel));
+
+  return card;
 }
 
 // ================= SETTINGS SCREEN =================
@@ -337,6 +402,8 @@ function buildCapture(): HTMLElement {
 
 async function startCapture(): Promise<void> {
   show("capture");
+  // Stamp when the operator actually started this test (device local clock, UTC ISO).
+  subject.testTakenAt = new Date().toISOString();
   cueEl.textContent = "Requesting camera…";
   eyeResults.left = null;
   eyeResults.right = null;
@@ -505,6 +572,12 @@ function finishSession(): void {
   const result: SessionResult = {
     createdAt: new Date().toISOString(),
     appVersion: APP_VERSION,
+    subject: {
+      name: subject.name.trim(),
+      age: subject.age === "" ? null : Number(subject.age),
+      gender: subject.gender,
+      testTakenAt: subject.testTakenAt || null,
+    },
     config: { ...config },
     device: {
       userAgent: navigator.userAgent,
@@ -562,6 +635,47 @@ function buildQuality(): SessionQuality {
   };
 }
 
+// Render subject/demographic details as a two-column table on the results
+// screen. Shows a friendly dash for any field left blank.
+function buildSubjectTable(result: SessionResult): HTMLElement {
+  const subj = result.subject;
+  const genderLabels: Record<string, string> = {
+    female: "Female",
+    male: "Male",
+    other: "Other",
+    prefer_not_to_say: "Prefer not to say",
+  };
+  const rows: [string, string][] = [
+    ["Name", subj.name ? subj.name : "—"],
+    ["Age", subj.age === null || subj.age === undefined ? "—" : String(subj.age)],
+    ["Gender", subj.gender ? genderLabels[subj.gender] ?? subj.gender : "—"],
+    ["Test taken at", subj.testTakenAt ? formatTimestamp(subj.testTakenAt) : "—"],
+  ];
+
+  const table = el("table", {}, [
+    el("thead", {}, [
+      el("tr", {}, [el("th", {}, ["Field"]), el("th", {}, ["Value"])]),
+    ]),
+  ]);
+  const tb = el("tbody");
+  for (const [label, value] of rows) {
+    tb.appendChild(el("tr", {}, [el("td", {}, [label]), el("td", {}, [value])]));
+  }
+  table.appendChild(tb);
+  return el("div", { class: "card" }, [
+    el("h2", {}, ["Subject details"]),
+    table,
+  ]);
+}
+
+// Human-readable local rendering of an ISO timestamp; falls back to the raw
+// string if the browser can't parse it.
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
 function renderResults(result: SessionResult): void {
   const body = document.getElementById("results-body")!;
   body.innerHTML = "";
@@ -592,6 +706,8 @@ function renderResults(result: SessionResult): void {
       ]),
     ])
   );
+
+  body.appendChild(buildSubjectTable(result));
 
   // Per-eye metric table.
   const table = el("table", {}, [
@@ -693,28 +809,56 @@ function renderResults(result: SessionResult): void {
   body.appendChild(qcard);
 
   // Actions.
-  body.appendChild(
-    el("div", { class: "pad" }, [
-      el("div", { class: "row" }, [
-        el("button", { class: "btn", onclick: () => exportJSON(result) }, [
-          "Export JSON",
-        ]),
-        el("button", { class: "btn", onclick: () => exportCSV(result) }, [
-          "Export CSV",
-        ]),
-      ]),
-      el(
-        "button",
-        {
-          class: "btn primary",
-          onclick: () => {
-            show("intro");
-          },
+  const exportRow = el("div", { class: "row" }, [
+    el("button", { class: "btn", onclick: () => exportJSON(result) }, [
+      "Export JSON",
+    ]),
+    el("button", { class: "btn", onclick: () => exportCSV(result) }, [
+      "Export CSV",
+    ]),
+  ]);
+
+  const actionsPad = el("div", { class: "pad" }, [exportRow]);
+
+  // Optional one-tap upload to a Google Sheet (only when a Web App URL is set).
+  if (SHEETS_WEBAPP_URL) {
+    const sheetStatus = el("div", { class: "status-line" }, [""]);
+    const sheetBtn = el("button", {
+      class: "btn",
+      onclick: async (e: Event) => {
+        const btn = e.currentTarget as HTMLButtonElement;
+        btn.disabled = true;
+        sheetStatus.textContent = "Sending to Google Sheets…";
+        try {
+          await sendToSheets(SHEETS_WEBAPP_URL, result);
+          sheetStatus.textContent =
+            "Sent. Check your Google Sheet to confirm the new row.";
+        } catch (err) {
+          btn.disabled = false;
+          sheetStatus.textContent =
+            "Could not send: " + ((err as Error)?.message ?? "network error");
+        }
+      },
+    }) as HTMLButtonElement;
+    sheetBtn.appendChild(document.createTextNode("Send to Google Sheets"));
+    exportRow.appendChild(sheetBtn);
+    actionsPad.appendChild(sheetStatus);
+  }
+
+  actionsPad.appendChild(
+    el(
+      "button",
+      {
+        class: "btn primary",
+        onclick: () => {
+          show("intro");
         },
-        ["New screening"]
-      ),
-    ])
+      },
+      ["New screening"]
+    )
   );
+
+  body.appendChild(actionsPad);
 }
 
 function kv(k: string, v: string): HTMLElement {

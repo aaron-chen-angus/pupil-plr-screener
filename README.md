@@ -147,6 +147,136 @@ Using `new URL(..., import.meta.url)` keeps these paths valid under the Pages su
   consistency; when the browser refuses to lock them, this is recorded as a **quality caveat**.
 - This is **not** a pupillometer-grade instrument and makes no claim of clinical precision.
 
+## Subject details collected
+
+Before starting a screening, the intro screen shows a **Subject details** card
+with optional fields:
+
+- **Name** — free text
+- **Age** — whole years
+- **Gender** — Female / Male / Other / Prefer not to say
+- **Test taken at** — captured automatically the moment you tap **Start**
+  (device clock, stored as a UTC ISO-8601 timestamp)
+
+All four fields are recorded **on-device** with the session and appear in the
+results **Subject details** table and in both the JSON and CSV exports. Any
+field can be left blank to keep the session anonymous. See the full
+[data dictionary §7.1.1](./DOCUMENTATION.md#711-subject-details-subject).
+
+> ⚠️ **Privacy.** Name/age/gender are personal data. Obtain appropriate consent,
+> and if you enable the Google Sheets integration below be aware the data leaves
+> the device and lands in your Google account. Without that integration the app
+> transmits nothing.
+
+## Send results to Google Sheets
+
+The app is a static, backend-free site, so it collects results into a Google
+Sheet using a **Google Apps Script Web App** — a tiny script that lives in your
+own Google account and appends one row per completed screening. You choose
+whether to enable it; if you don't paste a URL, the button never appears and the
+app stays fully offline.
+
+You have two options. **Option A (automatic push)** is the recommended data
+table workflow. **Option B (manual CSV import)** needs no setup at all.
+
+### Option A — Automatic push (one tap per session)
+
+**Step 1 — Create the spreadsheet.**
+1. Go to <https://sheets.google.com> and create a new blank spreadsheet.
+2. Name it, e.g. `PLR Screener Results`. Leave the tab as `Sheet1` (the script
+   uses the first sheet). You do **not** need to add headers — the script writes
+   them automatically on the first run.
+
+**Step 2 — Open the bound Apps Script project.**
+1. In the spreadsheet menu, choose **Extensions → Apps Script**.
+2. Delete any code in the `Code.gs` editor and paste the script below.
+
+```javascript
+// PLR Screener → Google Sheets receiver.
+// Appends one row per posted session. Writes a header row on first use.
+const HEADERS = [
+  'name','age','gender','testTakenAt',
+  'createdAt','appVersion','stimulusDelivered','indicator',
+  'asymmetryScore','asymmetryThreshold','unreliable',
+  'right_baselineMm','right_minMm','right_percentConstriction','right_latencyMs',
+  'right_meanVelocity','right_maxVelocity','right_reliable',
+  'left_baselineMm','left_minMm','left_percentConstriction','left_latencyMs',
+  'left_meanVelocity','left_maxVelocity','left_reliable'
+];
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000); // serialise concurrent posts
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    if (sheet.getLastRow() === 0) sheet.appendRow(HEADERS);
+    const data = JSON.parse(e.postData.contents);
+    const row = HEADERS.map(function (key) {
+      return data[key] === undefined || data[key] === null ? '' : data[key];
+    });
+    sheet.appendRow(row);
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
+}
+```
+
+3. Click the **Save** icon.
+
+**Step 3 — Deploy it as a Web App.**
+1. Click **Deploy → New deployment**.
+2. Click the gear next to **Select type** and choose **Web app**.
+3. Set **Description** to anything (e.g. `v1`).
+4. Set **Execute as** to **Me**.
+5. Set **Who has access** to **Anyone**. (This is required so the app running in
+   a browser can post without a Google login. The URL is unguessable; treat it
+   like a secret.)
+6. Click **Deploy**. Approve the Google authorization prompt (choose your
+   account → **Advanced** → **Go to … (unsafe)** → **Allow**). This is Google
+   warning you about your own script; it is expected.
+7. Copy the **Web app URL**. It ends in `/exec` and looks like
+   `https://script.google.com/macros/s/AKfy…/exec`.
+
+**Step 4 — Point the app at your Web App.**
+1. Open `app/config.js` (the shipping build-free variant) and paste the URL:
+   ```js
+   export const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfy…/exec";
+   ```
+   If you also use the Vite/TypeScript build, set the same value in
+   `src/config.ts`.
+2. Redeploy the site (commit and push — GitHub Pages rebuilds automatically).
+
+**Step 5 — Use it.**
+1. Run a screening as usual. On the results screen you'll now see a
+   **Send to Google Sheets** button next to Export JSON/CSV.
+2. Tap it. Within a second or two a new row appears in your spreadsheet.
+
+> **Note on confirmation.** For security the browser sends this as an opaque
+> (`no-cors`) request, so the app can report only that the row was *sent*, not
+> read a reply back. Always glance at the sheet to confirm the row landed. If
+> rows don't appear: re-check that the URL ends in `/exec`, that **Who has
+> access** is **Anyone**, and that you **redeployed** after any script edit
+> (Apps Script requires **Deploy → Manage deployments → Edit → New version**
+> for changes to take effect).
+
+### Option B — Manual CSV import (no setup)
+
+If you prefer not to run a script:
+1. On the results screen tap **Export CSV**.
+2. In Google Sheets choose **File → Import → Upload** and select the CSV.
+3. Choose **Insert new sheet** (or **Append to current sheet**) and import.
+
+The CSV begins with a few `#` comment lines and a `subject` block (name, age,
+gender, testTakenAt), followed by the per-eye summary and the raw per-frame
+samples, so every field including the new subject data comes across.
+
 ## Explicit non-goals
 
 - No swinging-flashlight RAPD "escape phenomenon" detection.

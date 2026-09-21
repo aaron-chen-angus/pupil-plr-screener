@@ -21,3 +21,16 @@ export const APP_VERSION = "1.0.0";
 
 /** Anatomical iris horizontal diameter used as the px->mm scale reference. */
 export const IRIS_DIAMETER_MM = 11.7;
+
+/**
+ * Optional Google Sheets integration.
+ *
+ * Paste the "/exec" URL of a deployed Google Apps Script Web App here to enable
+ * the "Send to Google Sheets" button on the results screen. Each completed
+ * session is POSTed as one flat row (subject details + summary metrics). Leave
+ * this as an empty string to hide the button and keep the app fully offline.
+ *
+ * See README ("Send results to Google Sheets") for the exact setup steps and
+ * the Apps Script code to paste.
+ */
+export const SHEETS_WEBAPP_URL = "";

@@ -404,6 +404,7 @@ input[type="range"] {
   width: 140px;
 }
 input[type="number"],
+input[type="text"],
 select {
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -415,6 +416,9 @@ select {
 input[type="number"] {
   width: 72px;
   text-align: right;
+}
+input[type="text"] {
+  width: 180px;
 }
 
 .plot-wrap {

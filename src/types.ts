@@ -94,9 +94,22 @@ export interface SessionConfig {
   demoMode: boolean;
 }
 
+/** Optional subject/demographic details recorded with a session. */
+export interface Subject {
+  /** Free-text name; empty string when not provided. */
+  name: string;
+  /** Age in years; null when not provided. */
+  age: number | null;
+  /** Gender selection; empty string when not provided. */
+  gender: string;
+  /** ISO-8601 timestamp captured when the operator started the test; null if unset. */
+  testTakenAt: string | null;
+}
+
 export interface SessionResult {
   createdAt: string;
   appVersion: string;
+  subject: Subject;
   config: SessionConfig;
   device: {
     userAgent: string;

@@ -6,9 +6,10 @@ import { Voice } from "./voice.js";
 import { computeAsymmetry } from "./metrics.js";
 import { drawPlot, PLOT_COLORS } from "./plot.js";
 import { exportCSV, exportJSON } from "./export.js";
+import { sendToSheets } from "./sheets.js";
 import { el, disclaimerBanner } from "./ui.js";
 import { WakeListener } from "./listen.js";
-import { APP_VERSION } from "./config.js";
+import { APP_VERSION, SHEETS_WEBAPP_URL } from "./config.js";
 
 const app = document.getElementById("app");
 
@@ -39,6 +40,17 @@ let voice = null;
 let listener = null;
 let openResult = null;
 const eyeResults = { left: null, right: null };
+
+// Subject/demographic details collected before a screening. These are stored
+// on-device only and included in the exported session record. Purely optional
+// identifying fields — they do not affect any measurement or the CV pipeline.
+const subject = {
+  name: "",
+  age: "",
+  gender: "",
+  // ISO-8601 timestamp captured when the operator actually starts the test.
+  testTakenAt: "",
+};
 
 // ---------- Brand header ----------
 function brand() {
@@ -84,6 +96,8 @@ function buildIntro() {
     ]),
   ]);
   s.appendChild(info);
+
+  s.appendChild(buildSubjectCard());
 
   const actions = el("div", { class: "pad" });
 
@@ -178,6 +192,56 @@ function capBadge(label, ok) {
       ok ? "available" : "unavailable",
     ]),
   ]);
+}
+
+// ---------- Subject details form ----------
+// Optional demographic fields recorded alongside the screening. Stored on-device
+// and included in the JSON/CSV export. They never influence the measurement.
+function buildSubjectCard() {
+  const card = el("div", { class: "card" }, [
+    el("h2", {}, ["Subject details"]),
+    el("p", { class: "muted" }, [
+      "Optional. Recorded on-device with this session and included in the export. Leave blank to keep the session anonymous.",
+    ]),
+  ]);
+
+  const nameInput = el("input", {
+    type: "text",
+    placeholder: "Full name",
+    autocomplete: "off",
+    value: subject.name,
+    oninput: (e) => (subject.name = e.target.value),
+  });
+  card.appendChild(field("Name", nameInput));
+
+  const ageInput = el("input", {
+    type: "number",
+    placeholder: "Years",
+    min: "0",
+    max: "120",
+    value: subject.age,
+    oninput: (e) => (subject.age = e.target.value),
+  });
+  card.appendChild(field("Age", ageInput));
+
+  const genderSel = el("select", {
+    onchange: (e) => (subject.gender = e.target.value),
+  });
+  const genderOptions = [
+    ["", "Select…"],
+    ["female", "Female"],
+    ["male", "Male"],
+    ["other", "Other"],
+    ["prefer_not_to_say", "Prefer not to say"],
+  ];
+  for (const [value, label] of genderOptions) {
+    const opt = el("option", { value }, [label]);
+    if (subject.gender === value) opt.setAttribute("selected", "selected");
+    genderSel.appendChild(opt);
+  }
+  card.appendChild(field("Gender", genderSel));
+
+  return card;
 }
 
 // ================= SETTINGS SCREEN =================
@@ -338,6 +402,8 @@ function buildCapture() {
 
 async function startCapture() {
   show("capture");
+  // Stamp when the operator actually started this test (device local clock, UTC ISO).
+  subject.testTakenAt = new Date().toISOString();
   cueEl.textContent = "Requesting camera…";
   eyeResults.left = null;
   eyeResults.right = null;
@@ -548,6 +614,12 @@ function finishSession() {
   const result = {
     createdAt: new Date().toISOString(),
     appVersion: APP_VERSION,
+    subject: {
+      name: subject.name.trim(),
+      age: subject.age === "" ? null : Number(subject.age),
+      gender: subject.gender,
+      testTakenAt: subject.testTakenAt || null,
+    },
     config: { ...config },
     device: {
       userAgent: navigator.userAgent,
@@ -608,6 +680,44 @@ function buildQuality() {
   };
 }
 
+// Render subject/demographic details as a two-column table on the results
+// screen. Shows a friendly dash for any field left blank.
+function buildSubjectTable(result) {
+  const subj = result.subject ?? {};
+  const genderLabels = {
+    female: "Female",
+    male: "Male",
+    other: "Other",
+    prefer_not_to_say: "Prefer not to say",
+  };
+  const rows = [
+    ["Name", subj.name ? subj.name : "—"],
+    ["Age", subj.age === null || subj.age === undefined ? "—" : String(subj.age)],
+    ["Gender", subj.gender ? genderLabels[subj.gender] ?? subj.gender : "—"],
+    ["Test taken at", subj.testTakenAt ? formatTimestamp(subj.testTakenAt) : "—"],
+  ];
+
+  const table = el("table", {}, [
+    el("thead", {}, [
+      el("tr", {}, [el("th", {}, ["Field"]), el("th", {}, ["Value"])]),
+    ]),
+  ]);
+  const tb = el("tbody");
+  for (const [label, value] of rows) {
+    tb.appendChild(el("tr", {}, [el("td", {}, [label]), el("td", {}, [value])]));
+  }
+  table.appendChild(tb);
+  return el("div", { class: "card" }, [el("h2", {}, ["Subject details"]), table]);
+}
+
+// Human-readable local rendering of an ISO timestamp; falls back to the raw
+// string if the browser can't parse it.
+function formatTimestamp(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
 function renderResults(result) {
   const body = document.getElementById("results-body");
   body.innerHTML = "";
@@ -636,6 +746,8 @@ function renderResults(result) {
       ]),
     ])
   );
+
+  body.appendChild(buildSubjectTable(result));
 
   const table = el("table", {}, [
     el("thead", {}, [
@@ -721,15 +833,46 @@ function renderResults(result) {
   }
   body.appendChild(qcard);
 
-  body.appendChild(
-    el("div", { class: "pad" }, [
-      el("div", { class: "row" }, [
-        el("button", { class: "btn", onclick: () => exportJSON(result) }, ["Export JSON"]),
-        el("button", { class: "btn", onclick: () => exportCSV(result) }, ["Export CSV"]),
-      ]),
-      el("button", { class: "btn primary", onclick: () => show("intro") }, ["New screening"]),
-    ])
+  const exportRow = el("div", { class: "row" }, [
+    el("button", { class: "btn", onclick: () => exportJSON(result) }, ["Export JSON"]),
+    el("button", { class: "btn", onclick: () => exportCSV(result) }, ["Export CSV"]),
+  ]);
+
+  const actionsPad = el("div", { class: "pad" }, [exportRow]);
+
+  // Optional one-tap upload to a Google Sheet (only when a Web App URL is set).
+  if (SHEETS_WEBAPP_URL) {
+    const sheetStatus = el("div", { class: "status-line" }, [""]);
+    const sheetBtn = el(
+      "button",
+      {
+        class: "btn",
+        onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          sheetStatus.textContent = "Sending to Google Sheets…";
+          try {
+            await sendToSheets(SHEETS_WEBAPP_URL, result);
+            sheetStatus.textContent =
+              "Sent. Check your Google Sheet to confirm the new row.";
+          } catch (err) {
+            btn.disabled = false;
+            sheetStatus.textContent =
+              "Could not send: " + (err?.message ?? "network error");
+          }
+        },
+      },
+      ["Send to Google Sheets"]
+    );
+    exportRow.appendChild(sheetBtn);
+    actionsPad.appendChild(sheetStatus);
+  }
+
+  actionsPad.appendChild(
+    el("button", { class: "btn primary", onclick: () => show("intro") }, ["New screening"])
   );
+
+  body.appendChild(actionsPad);
 }
 
 function kv(k, v) {
