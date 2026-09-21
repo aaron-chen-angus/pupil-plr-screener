@@ -283,13 +283,27 @@ function doPost(e) {
 ### Live monitoring & analytics dashboard (R Shiny)
 
 A companion **R Shiny dashboard** in [`r-dashboard/`](./r-dashboard/) reads the
-same Google Sheet **live** and turns it into a real-time monitor with scientific
-visualizations, summary statistics, and an educational explainer of the PLR
-metrics. See [`r-dashboard/README.md`](./r-dashboard/README.md) for setup, then:
+same Google Sheet **live** (read-only, via its CSV export) and turns it into a
+real-time monitoring and analytics console: auto-refreshing session feed and
+KPIs, distribution and per-eye comparison plots, interocular asymmetry analysis,
+a correlation matrix, demographic breakdowns, descriptive statistics with paired
+significance tests, and an educational explainer of the PLR metrics.
+
+**🔗 Live dashboard:** <https://smile-rp.shinyapps.io/SMILE_PLRscreener/>
+
+It is deployed on [shinyapps.io](https://www.shinyapps.io/) and needs no R
+installation to view. To run or redeploy it locally, see
+[`r-dashboard/README.md`](./r-dashboard/README.md), then:
 
 ```bash
 Rscript -e "shiny::runApp('r-dashboard/app.R', launch.browser = TRUE)"
 ```
+
+The dashboard is a strictly read-only consumer of the sheet — it never writes
+back — so it cannot alter collected data. Full technical architecture and the
+statistical methods used are documented in
+[`r-dashboard/README.md`](./r-dashboard/README.md) and
+[`DOCUMENTATION.md` §10](./DOCUMENTATION.md).
 
 ### Option B — Manual CSV import (no setup)
 

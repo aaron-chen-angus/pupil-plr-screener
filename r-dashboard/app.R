@@ -112,7 +112,9 @@ EXPECTED_COLS <- c(
 # DATA ACCESS & CLEANING
 # =============================================================================
 
-# A shared ggplot theme for a clean, publication-style look.
+# A shared ggplot theme for a clean, publication-style look. Legends sit on the
+# right so that ggplotly() does not overlap them with the x-axis title (a common
+# issue where plotly ignores a "bottom" legend's reserved space).
 theme_plr <- function(base_size = 13) {
   theme_minimal(base_size = base_size) +
     theme(
@@ -121,10 +123,28 @@ theme_plr <- function(base_size = 13) {
       panel.grid.minor = element_blank(),
       panel.grid.major = element_line(color = PAL$grid),
       axis.title = element_text(face = "bold"),
-      legend.position = "bottom",
+      legend.position = "right",
       legend.title = element_text(face = "bold"),
       strip.text = element_text(face = "bold")
     )
+}
+
+# Finalize an interactive plotly chart: give it generous margins so axis titles
+# never collide with the legend or the plot edge, and place the legend below the
+# plot with its own reserved band. Use for every ggplotly() output.
+plotlyize <- function(p, legend_bottom = TRUE) {
+  gp <- ggplotly(p)
+  gp <- layout(
+    gp,
+    margin = list(l = 70, r = 30, t = 50, b = if (legend_bottom) 110 else 70),
+    legend = if (legend_bottom) {
+      list(orientation = "h", x = 0.5, xanchor = "center",
+           y = -0.28, yanchor = "top")
+    } else {
+      list(orientation = "v")
+    }
+  )
+  config(gp, displayModeBar = FALSE)
 }
 
 # Coerce the loose "TRUE"/"FALSE"/"" strings that arrive from Sheets into logicals.
@@ -397,7 +417,7 @@ body <- dashboardBody(
       ),
       fluidRow(
         box(width = 12, status = "info", solidHeader = TRUE,
-            title = "Δ%constriction vs Δvelocity (drivers of the composite score)",
+            title = "Between-eye differences (drivers of the composite score)",
             plotlyOutput("asym_drivers", height = 380))
       )
     ),
@@ -605,12 +625,13 @@ server <- function(input, output, session) {
     lbl <- if (nrow(d) && any(!is.na(d$timestamp))) {
       format(max(d$timestamp, na.rm = TRUE), "%d %b %H:%M")
     } else "—"
-    valueBox(lbl, "Most recent session", icon = icon("clock"), color = "purple")
+    valueBox(span(style = "font-size: 24px;", lbl),
+             "Most recent session", icon = icon("clock"), color = "purple")
   })
   output$kpi_stream_state <- renderValueBox({
     on <- isTRUE(input$auto_refresh)
     valueBox(if (on) "LIVE" else "Paused",
-             sprintf("Auto-refresh every %ds", REFRESH_MS / 1000),
+             sprintf("Refresh: %ds", REFRESH_MS / 1000),
              icon = icon(if (on) "signal" else "pause"),
              color = if (on) "green" else "yellow")
   })
@@ -656,7 +677,7 @@ server <- function(input, output, session) {
       geom_col(fill = PAL$accent, alpha = 0.85) +
       scale_x_date(labels = date_format("%d %b")) +
       labs(x = NULL, y = "Sessions") + theme_plr()
-    ggplotly(p) %>% config(displayModeBar = FALSE)
+    plotlyize(p, legend_bottom = FALSE)
   })
 
   output$live_indicator_donut <- renderPlotly({
@@ -665,7 +686,11 @@ server <- function(input, output, session) {
     tab <- d %>% dplyr::count(indicator)
     plot_ly(tab, labels = ~indicator, values = ~n, type = "pie", hole = 0.55,
             marker = list(colors = c("#FEE0D2", "#F0F0F0", "#E5F5E0", "#DADAEB"))) %>%
-      layout(showlegend = TRUE) %>% config(displayModeBar = FALSE)
+      layout(showlegend = TRUE,
+             legend = list(orientation = "h", x = 0.5, xanchor = "center",
+                           y = -0.1, yanchor = "top"),
+             margin = list(l = 20, r = 20, t = 20, b = 60)) %>%
+      config(displayModeBar = FALSE)
   })
 
   output$live_quality <- renderPlotly({
@@ -683,8 +708,9 @@ server <- function(input, output, session) {
       scale_fill_manual(values = c("Reliable" = PAL$symmetric,
         "Unreliable" = PAL$asymmetric, "Stimulus delivered" = PAL$right,
         "No stimulus" = PAL$insufficient)) +
-      labs(x = NULL, y = "Sessions") + theme_plr()
-    ggplotly(p) %>% config(displayModeBar = FALSE)
+      labs(x = NULL, y = "Sessions") + theme_plr() +
+      theme(legend.position = "none")
+    plotlyize(p, legend_bottom = FALSE)
   })
 
   # ==========================================================================
@@ -758,9 +784,10 @@ server <- function(input, output, session) {
     p <- p +
       scale_fill_manual(values = c(Right = PAL$right, Left = PAL$left)) +
       scale_color_manual(values = c(Right = PAL$right, Left = PAL$left)) +
-      labs(x = sprintf("%s (%s)", METRICS[[m]]$label, unit), y = "Density") +
+      labs(x = sprintf("%s (%s)", METRICS[[m]]$label, unit), y = "Density",
+           fill = "Eye", color = "Eye") +
       theme_plr()
-    ggplotly(p)
+    plotlyize(p, legend_bottom = TRUE)
   })
 
   output$dist_facets <- renderPlot({
@@ -803,7 +830,7 @@ server <- function(input, output, session) {
       scale_fill_manual(values = c(Right = PAL$right, Left = PAL$left)) +
       labs(x = NULL, y = sprintf("%s (%s)", METRICS[[m]]$label, METRICS[[m]]$unit)) +
       theme_plr() + theme(legend.position = "none")
-    ggplotly(p)
+    plotlyize(p, legend_bottom = FALSE)
   })
 
   output$eye_scatter <- renderPlotly({
@@ -824,7 +851,7 @@ server <- function(input, output, session) {
            color = "Indicator",
            subtitle = "Points on the dashed line = perfectly symmetric") +
       theme_plr()
-    ggplotly(p)
+    plotlyize(p, legend_bottom = TRUE)
   })
 
   output$eye_means <- renderPlot({
@@ -872,7 +899,7 @@ server <- function(input, output, session) {
            subtitle = if (is.finite(thr)) paste("Dashed line = median threshold",
              round(thr, 1)) else NULL) +
       theme_plr()
-    ggplotly(p)
+    plotlyize(p, legend_bottom = TRUE)
   })
 
   output$asym_bar <- renderPlotly({
@@ -884,8 +911,9 @@ server <- function(input, output, session) {
       scale_fill_manual(values = c(symmetric = PAL$symmetric,
         asymmetric = PAL$asymmetric, insufficient = PAL$insufficient,
         unknown = "grey60")) +
-      labs(x = NULL, y = "Sessions") + theme_plr()
-    ggplotly(p) %>% config(displayModeBar = FALSE)
+      labs(x = NULL, y = "Sessions") + theme_plr() +
+      theme(legend.position = "none")
+    plotlyize(p, legend_bottom = FALSE)
   })
 
   output$asym_drivers <- renderPlotly({
@@ -901,9 +929,9 @@ server <- function(input, output, session) {
       scale_color_manual(values = c(symmetric = PAL$symmetric,
         asymmetric = PAL$asymmetric, insufficient = PAL$insufficient,
         unknown = "grey60")) +
-      labs(x = "Δ % constriction (points)", y = "Δ mean velocity (mm/s)",
+      labs(x = "Delta % constriction (points)", y = "Delta mean velocity (mm/s)",
            color = "Indicator", size = "Score") + theme_plr()
-    ggplotly(p)
+    plotlyize(p, legend_bottom = TRUE)
   })
 
   # ==========================================================================
@@ -946,7 +974,7 @@ server <- function(input, output, session) {
     p <- ggplot(d, aes(age)) +
       geom_histogram(bins = 15, fill = PAL$accent, alpha = 0.85, color = "white") +
       labs(x = "Age (years)", y = "Sessions") + theme_plr()
-    ggplotly(p) %>% config(displayModeBar = FALSE)
+    plotlyize(p, legend_bottom = FALSE)
   })
 
   output$demo_gender <- renderPlotly({
@@ -955,8 +983,9 @@ server <- function(input, output, session) {
     tab <- d %>% dplyr::mutate(g = gender_label(gender)) %>% dplyr::count(g)
     p <- ggplot(tab, aes(reorder(g, n), n, fill = g)) +
       geom_col(show.legend = FALSE) + coord_flip() +
-      labs(x = NULL, y = "Sessions") + theme_plr()
-    ggplotly(p) %>% config(displayModeBar = FALSE)
+      labs(x = NULL, y = "Sessions") + theme_plr() +
+      theme(legend.position = "none")
+    plotlyize(p, legend_bottom = FALSE)
   })
 
   output$demo_age_con <- renderPlotly({
@@ -969,7 +998,7 @@ server <- function(input, output, session) {
       geom_point(color = PAL$right, size = 2.4, alpha = 0.8) +
       geom_smooth(method = "lm", se = TRUE, color = PAL$asymmetric, fill = "#FDD") +
       labs(x = "Age (years)", y = "Mean % constriction (both eyes)") + theme_plr()
-    ggplotly(p)
+    plotlyize(p, legend_bottom = FALSE)
   })
 
   # ==========================================================================

@@ -1,13 +1,48 @@
 # PLR Screener — Live Monitoring & Analytics Dashboard (R Shiny)
 
-A real-time, scientific, and educational dashboard for the
-[PLR Screener](../README.md) web app. It reads completed screenings **live** from
-the same Google Sheet the web app writes to, monitors incoming sessions,
-produces comprehensive visualizations, computes summary statistics, and explains
-how the pupillary light reflex (PLR) metrics are derived and interpreted.
+A real-time, scientific, and educational analytics dashboard for the
+[PLR Screener](../README.md) web app. It ingests completed screenings **live**
+from the Google Sheet the web app writes to, monitors incoming sessions,
+produces a comprehensive suite of visualizations, computes descriptive and
+inferential statistics, and explains how each pupillary light reflex (PLR)
+metric is derived and interpreted.
+
+## 🔗 Live dashboard
+
+**Hosted app:** <https://smile-rp.shinyapps.io/SMILE_PLRscreener/>
+
+The dashboard is deployed on [shinyapps.io](https://www.shinyapps.io/) and reads
+the shared results Google Sheet on an anonymous, read-only basis, so it can be
+opened directly in a browser with no R installation. The instructions below are
+for running or redeploying it locally.
 
 > ⚠️ **Not a medical device.** Screening / teaching demonstrator only. Nothing in
-> this dashboard is a diagnosis or a clinically validated cutoff.
+> this dashboard is a diagnosis or a clinically validated cutoff. All values are
+> illustrative; the asymmetry threshold is an unvalidated screening parameter.
+
+## Role in the system
+
+```
+ ┌───────────────────┐      HTTPS POST       ┌──────────────────────┐
+ │  PLR web app       │  (one row / session)  │  Google Apps Script  │
+ │  (phone browser)   │ ────────────────────▶ │  Web App (doPost)    │
+ └───────────────────┘                        └──────────┬───────────┘
+                                                          │ appendRow
+                                                          ▼
+                                              ┌──────────────────────┐
+                                              │  Google Sheet         │
+                                              │  (one row per test)   │
+                                              └──────────┬───────────┘
+                                                          │ CSV export (read-only)
+                                                          ▼
+                                              ┌──────────────────────┐
+                                              │  R Shiny dashboard    │
+                                              │  (this app)           │
+                                              └──────────────────────┘
+```
+
+The dashboard is strictly a **read-only consumer** of the sheet. It never writes
+back, so it cannot alter or corrupt collected data.
 
 ## What you get
 
@@ -91,6 +126,53 @@ typed and cleaned (numbers, logicals, ISO timestamps) and reconciled against the
 expected 25-column schema, so the app degrades gracefully if a column is missing
 or the sheet is briefly unreachable (it shows an empty state instead of erroring).
 
+## Technical architecture
+
+| Layer | Implementation |
+|---|---|
+| **Runtime** | R (≥ 4.1) + Shiny; single-file `app.R` (UI + server + data layer). |
+| **UI framework** | `shinydashboard` (sidebar + tabbed body) with `shinyWidgets` controls and a small custom CSS block for rounded cards and the disclaimer bar. |
+| **Live ingestion** | `shiny::reactivePoll()` polls the Google Sheet CSV export on a fixed interval (`REFRESH_MS`, default 15 s). A `reactiveVal` bumped by the *Refresh now* button forces an immediate re-read; toggling *Auto-refresh* off freezes the poll's check value so no network calls are made until the next manual refresh. |
+| **Parsing / typing** | `readr::read_csv()` → schema reconciliation against `EXPECTED_COLS` → numeric/logical coercion (`as_num`, `as_logical_loose`) → ISO-8601 parsing with `lubridate::ymd_hms()`. A typed zero-row tibble is returned on any error for graceful degradation. |
+| **Reactive filtering** | A single `data_f()` reactive applies the sidebar filters (reliable-only, date range, gender) and feeds every output, so all tabs stay consistent. |
+| **Visualization** | `ggplot2` for all statistical graphics, wrapped in `plotly::ggplotly()` for interactivity (hover, zoom). A shared `theme_plr()` and a `plotlyize()` helper standardise typography, a colour-blind-safe palette, legend placement, and margins. |
+| **Tables** | `DT` (DataTables) for the live feed, descriptive-statistics table, and filterable raw data with CSV download. |
+| **State model** | Fully reactive and stateless between sessions; no database, no server-side files. Each browser session holds its own filtered view. |
+
+### Metric registry
+
+Metrics are defined once in a `METRICS` list (label, unit, plain-language note)
+and reused across the metric pickers, axis labels, captions, and the statistics
+table. Adding a metric in one place propagates it everywhere.
+
+## Statistical & analytical methods
+
+- **Descriptive statistics** — per metric and per eye: n, mean, SD, median, min,
+  max. Computed on the current filtered set.
+- **Interocular comparison** — right vs left agreement is shown as a scatter
+  against the line of identity (`y = x`); systematic departure from the diagonal
+  indicates a between-eye difference. Per-eye means are plotted with 95%
+  confidence intervals (mean ± 1.96 · SEM).
+- **Paired hypothesis tests** — for the selected metric, a **paired t-test**
+  (parametric) and a **Wilcoxon signed-rank test** (non-parametric) compare the
+  right and left eyes over sessions where both eyes were measured. Reported with
+  the test statistic, degrees of freedom / V, p-value, and 95% CI of the mean
+  difference. These are **exploratory** and not corrected for multiple
+  comparisons.
+- **Asymmetry composite** — mirrors the web app: `score = Δ%constriction +
+  10 · Δmean-velocity`, classified against the (unvalidated) threshold into
+  *symmetric* / *asymmetric* / *insufficient*. The dashboard visualises both the
+  score and its two drivers.
+- **Correlation structure** — a Pearson correlation matrix over the numeric
+  metrics (pairwise-complete observations), rendered as an annotated heatmap.
+  Columns with insufficient variance or n are dropped automatically.
+- **Age association** — an exploratory linear fit of mean % constriction on age
+  with a 95% confidence band, included to illustrate the commonly reported
+  age-related decline in reflex amplitude (not established by this sample).
+
+All analyses respect the **reliable-only** toggle, so low-quality, demo, or
+no-stimulus runs can be excluded from statistics and figures with one click.
+
 ## Column schema
 
 The dashboard expects the columns the web app writes (see
@@ -116,6 +198,33 @@ left_meanVelocity, left_maxVelocity, left_reliable
   `libcurl`, `libssl`, and `libxml2`.
 - **Timestamps show "—":** the sheet's `testTakenAt` / `createdAt` weren't valid
   ISO-8601. Newer sessions from the web app include them automatically.
-- **Deploying online:** you can publish to [shinyapps.io](https://www.shinyapps.io/)
-  with `rsconnect::deployApp()`. Since the read is an anonymous CSV fetch, no
-  secrets need to be configured.
+- **Deploying online:** this dashboard is published at
+  <https://smile-rp.shinyapps.io/SMILE_PLRscreener/>. Because the read is an
+  anonymous CSV fetch, no secrets or OAuth need to be configured on the host.
+
+## Deploying / updating the hosted app
+
+The live app runs on [shinyapps.io](https://www.shinyapps.io/). To publish an
+update from this folder:
+
+```r
+install.packages("rsconnect")   # once
+
+rsconnect::setAccountInfo(
+  name   = "smile-rp",           # the shinyapps.io account
+  token  = "<TOKEN>",            # from shinyapps.io -> Account -> Tokens
+  secret = "<SECRET>")
+
+rsconnect::deployApp(
+  appDir   = ".",                # this r-dashboard folder
+  appName  = "SMILE_PLRscreener")
+```
+
+Notes:
+- shinyapps.io detects the `library()` calls in `app.R` and installs those
+  packages in the cloud image; the in-app `install.packages()` bootstrap is a
+  no-op there because the packages are already present.
+- The sheet must remain shared as **Anyone with the link → Viewer** for the
+  hosted app to read it.
+- Free-tier apps sleep when idle and wake on the next visit (first load may take
+  a few seconds).

@@ -30,8 +30,9 @@ critical care), biomedical/clinical engineers, and software developers.
 7. [Data dictionary](#7-data-dictionary)
 8. [Limitations, error sources & quality control](#8-limitations-error-sources--quality-control)
 9. [Intended use, indications & explicit non-goals](#9-intended-use-indications--explicit-non-goals)
-10. [Development breakdown, toolchain & dependencies](#10-development-breakdown-toolchain--dependencies)
-11. [References](#11-references)
+10. [Analytics & monitoring dashboard (R Shiny)](#10-analytics--monitoring-dashboard-r-shiny)
+11. [Development breakdown, toolchain & dependencies](#11-development-breakdown-toolchain--dependencies)
+12. [References](#12-references)
 
 ---
 
@@ -543,9 +544,101 @@ user to **seek formal clinical assessment**.
 
 ---
 
-## 10. Development breakdown, toolchain & dependencies
+## 10. Analytics & monitoring dashboard (R Shiny)
 
-### 10.1 Delivery model
+A companion **R Shiny** application provides real-time monitoring, comprehensive
+visualization, statistical summarisation, and an educational walkthrough of the
+data collected by the web app. It is a separate, read-only consumer of the same
+Google Sheet and does not participate in measurement.
+
+- **Hosted app:** <https://smile-rp.shinyapps.io/SMILE_PLRscreener/>
+- **Source:** [`r-dashboard/app.R`](./r-dashboard/app.R) (single-file Shiny app);
+  see [`r-dashboard/README.md`](./r-dashboard/README.md) for full operator and
+  developer documentation.
+
+### 10.1 Data flow & isolation
+
+The web app POSTs each finished session to the Apps Script Web App, which appends
+one row to the Google Sheet (§7.8). The dashboard reads that sheet through its
+**public CSV export endpoint** (`/export?format=csv&gid=<gid>`) on an anonymous,
+read-only basis — no Google login, OAuth, or API key is required for a
+link-shared sheet. The dashboard **never writes back**, so it cannot modify or
+corrupt the collected data. If the sheet is briefly unreachable or a column is
+missing, the app returns a typed empty result and shows a "waiting for data"
+state rather than erroring.
+
+### 10.2 Live-update mechanism
+
+Real-time behaviour is implemented with `shiny::reactivePoll()`:
+
+- The poll re-reads the sheet on a fixed interval (`REFRESH_MS`, default 15 s).
+- A *Refresh now* control (backed by a `reactiveVal`) forces an immediate re-read.
+- An *Auto-refresh* switch, when off, holds the poll's check value constant so no
+  network requests are made until the next manual refresh.
+
+Incoming values are parsed with `readr`, reconciled against the expected
+25-column schema (§7.8), coerced to numeric/logical types, and timestamps parsed
+as ISO-8601 (`lubridate`). A single reactive (`data_f`) applies the global
+filters (reliable-only, date range, gender) and feeds every tab, ensuring
+cross-tab consistency.
+
+### 10.3 Views
+
+| Tab | Contents |
+|---|---|
+| **Live monitor** | Auto-refreshing most-recent-first session feed, KPI value boxes (total, today, most-recent, stream state), sessions-over-time, indicator donut, live quality snapshot. |
+| **Overview & KPIs** | Headline rates (reliable %, symmetric %, real-stimulus %) and mean constriction / latency / velocity / asymmetry. |
+| **Distributions** | Per-metric histograms with optional density overlay, by eye, plus a faceted panel of every summary metric. |
+| **Left vs right eye** | Paired boxplots, right-vs-left agreement scatter against the line of identity, and per-eye means with 95% CIs. |
+| **Asymmetry** | Composite score vs threshold, indicator breakdown, and a between-eye drivers scatter (Δ%constriction vs Δvelocity). |
+| **Correlations** | Annotated Pearson correlation heatmap of the numeric metrics. |
+| **Demographics** | Age and gender distributions and an exploratory age-vs-reflex linear fit. |
+| **Statistics** | Descriptive table (n, mean, SD, median, min, max) per metric/eye; paired t-test and Wilcoxon signed-rank for left vs right; reliability/quality summary. |
+| **How it works** | Educational explainer: PLR physiology, metric definitions, how to read each chart, and interpretation cautions. |
+| **Raw data** | Filterable session table with CSV download of the current view. |
+
+### 10.4 Statistical methods
+
+- **Descriptive statistics** — per metric and eye, on the filtered set.
+- **Interocular comparison** — agreement scatter against `y = x`; per-eye means
+  with 95% CIs (mean ± 1.96 · SEM).
+- **Paired inference** — paired t-test (parametric) and Wilcoxon signed-rank
+  (non-parametric) on right vs left for sessions with both eyes measured;
+  reported with statistic, df/V, p-value, and 95% CI of the mean difference.
+  Exploratory; not corrected for multiple comparisons.
+- **Asymmetry composite** — reproduces the app's `score = Δ%constriction +
+  10 · Δmean-velocity` and its symmetric/asymmetric/insufficient classification.
+- **Correlation** — Pearson matrix over numeric metrics using pairwise-complete
+  observations; low-variance / low-n columns are excluded.
+- **Age association** — exploratory linear regression of mean % constriction on
+  age with a 95% confidence band (illustrative, not established by this sample).
+
+The **reliable-only** toggle excludes low-quality, demo, and no-stimulus runs
+from all figures and statistics.
+
+### 10.5 Toolchain
+
+| Component | Role |
+|---|---|
+| R (≥ 4.1) + `shiny` | Runtime and reactive framework |
+| `shinydashboard`, `shinyWidgets` | Dashboard layout and controls |
+| `ggplot2` + `plotly` | Statistical graphics + interactivity |
+| `dplyr`, `tidyr`, `readr`, `tibble`, `lubridate`, `stringr`, `scales` | Data wrangling, CSV read, typing, dates |
+| `DT` | Interactive tables + CSV download |
+| shinyapps.io | Managed hosting of the live app |
+
+### 10.6 Privacy note (dashboard)
+
+The dashboard displays whatever the sheet contains, which may include
+subject-identifying fields (name, age, gender). Access to the hosted dashboard
+and the underlying sheet should therefore be limited to authorised users, and
+consent obtained as appropriate. The dashboard adds no telemetry of its own.
+
+---
+
+## 11. Development breakdown, toolchain & dependencies
+
+### 11.1 Delivery model
 
 - **Build-free runtime.** The shipped app is plain browser **ES modules** (`app/*.js`) loaded by
   `index.html`, with an **import map** resolving the MediaPipe package to a CDN. No Node, bundler,
@@ -556,7 +649,7 @@ user to **seek formal clinical assessment**.
   static files (no compilation). Relative asset paths make it work under a project subpath;
   a `.nojekyll` file preserves underscore-prefixed assets.
 
-### 10.2 Third-party components
+### 11.2 Third-party components
 
 | Component | Version | Role | License |
 |---|---|---|---|
@@ -568,7 +661,7 @@ user to **seek formal clinical assessment**.
 The MediaPipe vision WASM runtime and the landmark model are loaded over HTTPS from Google's
 CDN/model hosts by default; both may be vendored locally for fully offline hosting (see README).
 
-### 10.3 Module map
+### 11.3 Module map
 
 | File | Responsibility |
 |---|---|
@@ -584,18 +677,24 @@ CDN/model hosts by default; both may be vendored locally for fully offline hosti
 | `app/metrics.js` | Per-eye metric computation + asymmetry + reliability |
 | `app/plot.js` | Pupil-diameter-vs-time plot for both eyes |
 | `app/export.js` | JSON / CSV export |
+| `app/sheets.js` | Optional Google Sheets upload: flattens a session to one row and POSTs it to the Apps Script Web App |
 | `app/ui.js` | DOM helpers + the non-dismissable disclaimer |
-| `app/main.js` | Screen flow, capability-driven mode selection, wiring, results rendering |
+| `app/main.js` | Screen flow, capability-driven mode selection, wiring, results rendering, auto-send to Sheets |
 
-### 10.4 Privacy & data handling
+### 11.4 Privacy & data handling
 
-All processing is **local to the browser**. No video, image, or measurement data is uploaded or
-stored on any server. Exports (JSON/CSV) are generated in-browser and downloaded by explicit user
-action. There is no analytics or telemetry.
+All measurement processing is **local to the browser**. No video or image data ever leaves the
+device. Exports (JSON/CSV) are generated in-browser and downloaded by explicit user action.
+When the optional Google Sheets integration is configured (as in this deployment), the finished
+**session summary** — including any subject fields (name, age, gender, testTakenAt) and the
+per-eye/asymmetry metrics (§7.8) — is transmitted to the linked Google Sheet and is subsequently
+readable by the analytics dashboard (§10). With no Web App URL configured, nothing is transmitted
+and there is no analytics or telemetry. Because the sheet may hold identifying data, restrict
+access to the sheet and dashboard and obtain consent as appropriate.
 
 ---
 
-## 11. References
+## 12. References
 
 *Selected peer-reviewed and authoritative sources. Content in this manual has been paraphrased
 and summarized for licensing compliance; consult the originals for full detail.*
