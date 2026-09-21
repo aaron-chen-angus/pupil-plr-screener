@@ -280,6 +280,17 @@ function doPost(e) {
 > (Apps Script requires **Deploy → Manage deployments → Edit → New version**
 > for changes to take effect).
 
+### Live monitoring & analytics dashboard (R Shiny)
+
+A companion **R Shiny dashboard** in [`r-dashboard/`](./r-dashboard/) reads the
+same Google Sheet **live** and turns it into a real-time monitor with scientific
+visualizations, summary statistics, and an educational explainer of the PLR
+metrics. See [`r-dashboard/README.md`](./r-dashboard/README.md) for setup, then:
+
+```bash
+Rscript -e "shiny::runApp('r-dashboard/app.R', launch.browser = TRUE)"
+```
+
 ### Option B — Manual CSV import (no setup)
 
 If you prefer not to run a script:
