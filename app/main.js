@@ -840,32 +840,15 @@ function renderResults(result) {
 
   const actionsPad = el("div", { class: "pad" }, [exportRow]);
 
-  // Optional one-tap upload to a Google Sheet (only when a Web App URL is set).
+  // Automatic upload to a Google Sheet (only when a Web App URL is set). The
+  // session is sent as soon as the results render — no button/tap required.
+  // A live status line reports progress; a Retry button appears only on failure.
   if (SHEETS_WEBAPP_URL) {
-    const sheetStatus = el("div", { class: "status-line" }, [""]);
-    const sheetBtn = el(
-      "button",
-      {
-        class: "btn",
-        onclick: async (e) => {
-          const btn = e.currentTarget;
-          btn.disabled = true;
-          sheetStatus.textContent = "Sending to Google Sheets…";
-          try {
-            await sendToSheets(SHEETS_WEBAPP_URL, result);
-            sheetStatus.textContent =
-              "Sent. Check your Google Sheet to confirm the new row.";
-          } catch (err) {
-            btn.disabled = false;
-            sheetStatus.textContent =
-              "Could not send: " + (err?.message ?? "network error");
-          }
-        },
-      },
-      ["Send to Google Sheets"]
-    );
-    exportRow.appendChild(sheetBtn);
+    const sheetStatus = el("div", { class: "status-line" }, [
+      "Saving to Google Sheets…",
+    ]);
     actionsPad.appendChild(sheetStatus);
+    autoSendToSheets(result, sheetStatus, exportRow);
   }
 
   actionsPad.appendChild(
@@ -873,6 +856,49 @@ function renderResults(result) {
   );
 
   body.appendChild(actionsPad);
+}
+
+// Send the finished session to Google Sheets automatically. Called once when
+// the results screen renders. On failure it surfaces a Retry button so a
+// transient network error doesn't lose the data.
+async function autoSendToSheets(result, statusEl, actionRow) {
+  try {
+    await sendToSheets(SHEETS_WEBAPP_URL, result);
+    statusEl.textContent =
+      "Saved to Google Sheets. Check the sheet to confirm the new row.";
+  } catch (err) {
+    statusEl.textContent =
+      "Could not save to Google Sheets: " +
+      (err?.message ?? "network error") +
+      ". Your data is not lost — retry or export.";
+    if (!actionRow.querySelector(".retry-sheets")) {
+      const retry = el(
+        "button",
+        {
+          class: "btn retry-sheets",
+          onclick: async (e) => {
+            const btn = e.currentTarget;
+            btn.disabled = true;
+            statusEl.textContent = "Retrying…";
+            try {
+              await sendToSheets(SHEETS_WEBAPP_URL, result);
+              statusEl.textContent =
+                "Saved to Google Sheets. Check the sheet to confirm the new row.";
+              btn.remove();
+            } catch (err2) {
+              btn.disabled = false;
+              statusEl.textContent =
+                "Still could not save: " +
+                (err2?.message ?? "network error") +
+                ". Check your connection or export instead.";
+            }
+          },
+        },
+        ["Retry Google Sheets"]
+      );
+      actionRow.appendChild(retry);
+    }
+  }
 }
 
 function kv(k, v) {

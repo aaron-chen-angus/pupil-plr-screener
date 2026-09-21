@@ -154,8 +154,11 @@ plausible; it does **not** confer validated accuracy on *this* implementation.
 
 ### 4.1 High-level design
 
-The application is a **fully client-side, static web app** (no backend, no data transmission).
-All computer vision and signal processing run **on-device in the browser**. The controlled
+The application is a **fully client-side, static web app** (no backend of its own).
+All computer vision and signal processing run **on-device in the browser**. The only optional
+outbound transmission is the Google Sheets integration (§7, "Data transmission"), which — when a
+Web App URL is configured — automatically POSTs each finished session summary to a Google Apps
+Script endpoint; with no URL configured the app transmits nothing. The controlled
 light stimulus is delivered by the phone's **rear LED (torch)**; the **rear camera** records the
 eye. Because the operator holds the phone facing the patient, the operator cannot see the screen
 during capture — hence **voice guidance** drives the protocol.
@@ -343,8 +346,18 @@ eye is unreliable/missing, or overall focus confidence is < 0.25.
 
 ## 7. Data dictionary
 
-All variables are computed and stored **on-device**; nothing is transmitted off the phone.
-Exports are user-initiated (JSON / CSV).
+All variables are computed **on-device**. Exports are user-initiated (JSON / CSV).
+
+**Data transmission.** By default nothing leaves the device. When the optional
+Google Sheets integration is configured (`SHEETS_WEBAPP_URL` set in
+`app/config.js` / `src/config.ts`), each completed session is **automatically
+transmitted** to a Google Apps Script Web App the moment the results screen
+renders, which appends it as one row to a Google Sheet. This transmission
+includes the subject/demographic fields (name, age, gender, testTakenAt) and the
+summary metrics — see §7.7 for the exact row schema. In the current deployment
+this integration is enabled and rows are written to the linked results
+spreadsheet. See the README section "Send results to Google Sheets" for setup,
+the spreadsheet link, and the privacy note.
 
 ### 7.1 Session object (`SessionResult`)
 
@@ -365,9 +378,11 @@ Exports are user-initiated (JSON / CSV).
 #### 7.1.1 Subject details (`Subject`)
 
 Optional demographic/identifying fields entered by the operator on the intro
-screen **before** starting a screening. They are recorded **on-device only**,
-included in the JSON/CSV export, and have **no effect** on any measurement or on
-the computer-vision pipeline. Any field may be left blank to keep the session
+screen **before** starting a screening. They are recorded on-device, included in
+the JSON/CSV export, and — when the Google Sheets integration is configured —
+**automatically transmitted** to the linked Google Sheet with the session (§7.8).
+They have **no effect** on any measurement or on the computer-vision pipeline.
+Any field may be left blank to keep the session
 anonymous. Because these fields can contain personal data, treat exported files
 accordingly (see §8) and obtain consent as appropriate.
 
@@ -448,9 +463,36 @@ accordingly (see §8) and obtain consent as appropriate.
 ### 7.7 CSV export layout
 
 The CSV contains: a comment header (`# …` lines: created time, `stimulusDelivered`, indicator,
-threshold, score); a **summary** block (`section=summary`) with per-eye metric rows
+threshold, score); a **subject** block (`section=subject`) with `name`, `age`, `gender`,
+`testTakenAt`; a **summary** block (`section=summary`) with per-eye metric rows
 (`metric,value,unit`); and a **samples** block (`section=samples`) with the raw per-frame series
 (`tMs,diameterMm,irisPx,focus,dropped`). The JSON export is the complete `SessionResult` object.
+
+### 7.8 Google Sheets row schema
+
+When the Google Sheets integration is enabled, each completed session is flattened into a single
+row and POSTed to the Apps Script Web App (see `sheets.js` / `sheets.ts` → `buildSheetRow`). The
+Apps Script writes the header row automatically on first use. The columns, in order, are:
+
+| # | Column | Source | Notes |
+|---|---|---|---|
+| 1 | `name` | `subject.name` | Empty if not provided |
+| 2 | `age` | `subject.age` | Empty if not provided |
+| 3 | `gender` | `subject.gender` | Empty if not provided |
+| 4 | `testTakenAt` | `subject.testTakenAt` | ISO-8601, stamped at test start |
+| 5 | `createdAt` | `createdAt` | ISO-8601, stamped when results generated |
+| 6 | `appVersion` | `appVersion` | — |
+| 7 | `stimulusDelivered` | `stimulusDelivered` | boolean |
+| 8 | `indicator` | `asymmetry.indicator` | symmetric / asymmetric / insufficient |
+| 9 | `asymmetryScore` | `asymmetry.score` | rounded to 3 dp; empty if null |
+| 10 | `asymmetryThreshold` | `asymmetry.threshold` | unvalidated threshold used |
+| 11 | `unreliable` | `quality.unreliable` | boolean |
+| 12–18 | `right_*` | `eyes.right` | `baselineMm`, `minMm`, `percentConstriction`, `latencyMs`, `meanVelocity`, `maxVelocity`, `reliable` |
+| 19–25 | `left_*` | `eyes.left` | same seven fields as the right eye |
+
+Numeric cells are rounded to 3 decimal places; missing/`null`/non-finite values are written as an
+empty cell. Raw per-frame samples are **not** sent to the Sheet (they remain in the JSON/CSV
+exports only), to keep each session to one tidy row.
 
 ---
 
@@ -496,7 +538,8 @@ user to **seek formal clinical assessment**.
 - No diagnosis, condition detection, or clinical grading of any kind.
 - No front-screen white-flash stimulus (rear LED only; the screen faces the operator).
 - No claim of pupillometer-grade precision.
-- No backend service and no off-device data transmission.
+- No backend service of its own. The only optional outbound transmission is the configurable
+  Google Sheets integration (§7.8); with no Web App URL set, nothing is transmitted off-device.
 
 ---
 

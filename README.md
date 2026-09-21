@@ -163,23 +163,30 @@ results **Subject details** table and in both the JSON and CSV exports. Any
 field can be left blank to keep the session anonymous. See the full
 [data dictionary §7.1.1](./DOCUMENTATION.md#711-subject-details-subject).
 
-> ⚠️ **Privacy.** Name/age/gender are personal data. Obtain appropriate consent,
-> and if you enable the Google Sheets integration below be aware the data leaves
-> the device and lands in your Google account. Without that integration the app
-> transmits nothing.
+> ⚠️ **Privacy.** Name/age/gender are personal data. Obtain appropriate consent.
+> When the Google Sheets integration is configured (as it is in this deployment),
+> each completed session is sent **automatically** to the linked Google Sheet, so
+> the data leaves the device and lands in the connected Google account. With no
+> Web App URL configured the app transmits nothing and stays fully offline.
 
 ## Send results to Google Sheets
 
 The app is a static, backend-free site, so it collects results into a Google
-Sheet using a **Google Apps Script Web App** — a tiny script that lives in your
-own Google account and appends one row per completed screening. You choose
-whether to enable it; if you don't paste a URL, the button never appears and the
-app stays fully offline.
+Sheet using a **Google Apps Script Web App** — a tiny script that lives in a
+Google account and appends one row per completed screening. When a Web App URL
+is configured, the app sends each session **automatically** when the results
+screen appears — no button press needed. If no URL is set, nothing is sent and
+the app stays fully offline.
 
-You have two options. **Option A (automatic push)** is the recommended data
-table workflow. **Option B (manual CSV import)** needs no setup at all.
+**Live results spreadsheet (this deployment):**
+<https://docs.google.com/spreadsheets/d/10gcGeJ8XRWaDYqvwquj0uh13LYmArTBcVFUNhDJVFZo/edit>
+— every completed screening appends one row here automatically.
 
-### Option A — Automatic push (one tap per session)
+You have two options for wiring this up. **Option A (automatic push)** is the
+recommended data-table workflow and the one this deployment uses. **Option B
+(manual CSV import)** needs no setup at all.
+
+### Option A — Automatic push (sends itself, no tap)
 
 **Step 1 — Create the spreadsheet.**
 1. Go to <https://sheets.google.com> and create a new blank spreadsheet.
@@ -247,16 +254,23 @@ function doPost(e) {
 **Step 4 — Point the app at your Web App.**
 1. Open `app/config.js` (the shipping build-free variant) and paste the URL:
    ```js
-   export const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfy…/exec";
+   export const SHEETS_WEBAPP_URL =
+     "https://script.google.com/macros/s/AKfy…/exec";
    ```
    If you also use the Vite/TypeScript build, set the same value in
-   `src/config.ts`.
+   `src/config.ts`. (In this deployment both files are already pointed at the
+   live Web App.)
 2. Redeploy the site (commit and push — GitHub Pages rebuilds automatically).
 
 **Step 5 — Use it.**
-1. Run a screening as usual. On the results screen you'll now see a
-   **Send to Google Sheets** button next to Export JSON/CSV.
-2. Tap it. Within a second or two a new row appears in your spreadsheet.
+1. Run a screening as usual.
+2. When the results screen appears, the session is sent to the Sheet
+   **automatically**. A status line under the export buttons shows
+   *"Saving to Google Sheets…"* and then *"Saved to Google Sheets."* within a
+   second or two a new row appears in the spreadsheet — no button press needed.
+3. If the send fails (e.g. no connection), the status line says so and a
+   **Retry Google Sheets** button appears so no data is lost. You can also fall
+   back to **Export CSV/JSON**.
 
 > **Note on confirmation.** For security the browser sends this as an opaque
 > (`no-cors`) request, so the app can report only that the row was *sent*, not
