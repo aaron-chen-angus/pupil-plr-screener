@@ -33,4 +33,5 @@ export const APP_VERSION = "1.0.0";
  * See README ("Send results to Google Sheets") for the exact setup steps and
  * the Apps Script code to paste.
  */
-export const SHEETS_WEBAPP_URL = "";
+export const SHEETS_WEBAPP_URL =
+  "https://script.google.com/macros/s/AKfycbzO4xK7Op1zZrf4b1XI3KhrjicLUgqTjkV24mWGceL8QGz32Q3gK2Qpb5wLa9dbTceKYA/exec";
