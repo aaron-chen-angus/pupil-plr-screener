@@ -572,11 +572,15 @@ function drawOverlay(f) {
   ctx.stroke();
 
   if (f.iris) {
-    ctx.strokeStyle = "#3fb6ff";
+    ctx.save();
+    ctx.strokeStyle = "#00e5ff";
     ctx.lineWidth = 3;
+    ctx.shadowColor = "#00e5ff";
+    ctx.shadowBlur = 12;
     ctx.beginPath();
     ctx.arc(f.iris.centerPx.x, f.iris.centerPx.y, f.iris.diameterPx / 2, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.restore();
   }
 }
 

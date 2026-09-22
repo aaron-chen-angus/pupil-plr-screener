@@ -1,7 +1,12 @@
 import type { EyeMetrics } from "./types";
 
-const LEFT_COLOR = "#3fb6ff";
-const RIGHT_COLOR = "#ffb84a";
+// TRON palette (matches the app theme): cyan = left eye, orange = right eye.
+const LEFT_COLOR = "#00e5ff";
+const RIGHT_COLOR = "#ff6b00";
+const GRID_COLOR = "rgba(0, 229, 255, 0.18)";
+const GRID_FAINT = "rgba(0, 229, 255, 0.08)";
+const AXIS_TEXT = "#6b7a99";
+const MARKER_COLOR = "#ff6b00";
 
 /**
  * Draw pupil-diameter-vs-time traces for both eyes on a canvas.
@@ -49,8 +54,8 @@ export function drawPlot(
   }
 
   if (!isFinite(tMin) || !isFinite(dMin)) {
-    ctx.fillStyle = "#93a1b1";
-    ctx.font = "13px system-ui";
+    ctx.fillStyle = AXIS_TEXT;
+    ctx.font = "13px 'Exo 2', system-ui";
     ctx.textAlign = "center";
     ctx.fillText("No plottable data", cssW / 2, cssH / 2);
     return;
@@ -66,7 +71,7 @@ export function drawPlot(
   const yOf = (d: number) => pad.t + (1 - (d - dMin) / (dMax - dMin)) * plotH;
 
   // Axes / grid.
-  ctx.strokeStyle = "#26313d";
+  ctx.strokeStyle = GRID_COLOR;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(pad.l, pad.t);
@@ -74,15 +79,15 @@ export function drawPlot(
   ctx.lineTo(pad.l + plotW, pad.t + plotH);
   ctx.stroke();
 
-  ctx.fillStyle = "#93a1b1";
-  ctx.font = "10px system-ui";
+  ctx.fillStyle = AXIS_TEXT;
+  ctx.font = "10px 'Exo 2', system-ui";
   ctx.textAlign = "right";
   const yticks = 4;
   for (let i = 0; i <= yticks; i++) {
     const d = dMin + ((dMax - dMin) * i) / yticks;
     const y = yOf(d);
     ctx.fillText(d.toFixed(1), pad.l - 5, y + 3);
-    ctx.strokeStyle = "#1b242e";
+    ctx.strokeStyle = GRID_FAINT;
     ctx.beginPath();
     ctx.moveTo(pad.l, y);
     ctx.lineTo(pad.l + plotW, y);
@@ -92,20 +97,20 @@ export function drawPlot(
   // LED-onset vertical marker at t=0.
   if (tMin <= 0 && tMax >= 0) {
     const x0 = xOf(0);
-    ctx.strokeStyle = "#ffd54a";
+    ctx.strokeStyle = MARKER_COLOR;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(x0, pad.t);
     ctx.lineTo(x0, pad.t + plotH);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = "#ffd54a";
+    ctx.fillStyle = MARKER_COLOR;
     ctx.textAlign = "left";
     ctx.fillText("LED on", x0 + 3, pad.t + 10);
   }
 
   // x labels.
-  ctx.fillStyle = "#93a1b1";
+  ctx.fillStyle = AXIS_TEXT;
   ctx.textAlign = "center";
   const xticks = 4;
   for (let i = 0; i <= xticks; i++) {

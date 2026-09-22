@@ -70,6 +70,19 @@ suppressPackageStartupMessages({
   library(tibble)
 })
 
+# ---------------------------------------------------------------------------
+# NAMESPACE SAFETY (do not remove)
+# ---------------------------------------------------------------------------
+# plotly / DT pull in jsonlite, which exports its OWN validate() (signature
+# validate(txt), asserting is.character(txt)). Depending on package load order
+# jsonlite::validate can mask shiny::validate on the search path, which breaks
+# every `validate(need(...))` guard in the server with either:
+#   "unused argument (need(...))"   or   "is.character(txt) is not TRUE".
+# Pin the reactive-guard helpers to shiny explicitly so masking can never
+# happen again, regardless of which packages are attached later.
+validate <- shiny::validate
+need     <- shiny::need
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -86,15 +99,21 @@ SHEET_CSV_URL <- sprintf(
 # How often to poll the sheet for new rows (milliseconds).
 REFRESH_MS <- 15000
 
-# Neutral, colour-blind-friendly palette used throughout.
+# TRON palette — matched to the Virtual BlazePod design system.
+# Cyan = right eye, orange = left eye, on a deep space-black canvas.
 PAL <- list(
-  right      = "#2C7FB8",  # right eye
-  left       = "#D95F0E",  # left eye
-  symmetric  = "#2CA25F",
-  asymmetric = "#D7301F",
-  insufficient = "#969696",
-  accent     = "#6A51A3",
-  grid       = "#E6E6E6"
+  right      = "#00e5ff",  # right eye (cyan)
+  left       = "#ff6b00",  # left eye (orange)
+  symmetric  = "#00e676",
+  asymmetric = "#ff6b00",
+  insufficient = "#6b7a99",
+  accent     = "#00e5ff",
+  accent2    = "#ff6b00",
+  grid       = "#12314a",
+  bg         = "#050810",
+  panel      = "#0d1526",
+  text       = "#e8eaf0",
+  muted      = "#6b7a99"
 )
 
 # The 25 columns the web app posts, in order (see app/sheets.js -> buildSheetRow).
@@ -115,17 +134,26 @@ EXPECTED_COLS <- c(
 # A shared ggplot theme for a clean, publication-style look. Legends sit on the
 # right so that ggplotly() does not overlap them with the x-axis title (a common
 # issue where plotly ignores a "bottom" legend's reserved space).
+# TRON dark plot theme: transparent panel so the dark card shows through,
+# cyan-tinted grid, light text. Legends sit on the right so ggplotly() does not
+# overlap them with the x-axis title.
 theme_plr <- function(base_size = 13) {
   theme_minimal(base_size = base_size) +
     theme(
-      plot.title = element_text(face = "bold", size = base_size + 2),
-      plot.subtitle = element_text(color = "grey35"),
+      plot.background = element_rect(fill = PAL$panel, color = NA),
+      panel.background = element_rect(fill = PAL$panel, color = NA),
+      legend.background = element_rect(fill = PAL$panel, color = NA),
+      legend.key = element_rect(fill = PAL$panel, color = NA),
+      plot.title = element_text(face = "bold", size = base_size + 2, color = PAL$text),
+      plot.subtitle = element_text(color = PAL$muted),
       panel.grid.minor = element_blank(),
       panel.grid.major = element_line(color = PAL$grid),
-      axis.title = element_text(face = "bold"),
+      axis.title = element_text(face = "bold", color = PAL$text),
+      axis.text = element_text(color = PAL$muted),
       legend.position = "right",
-      legend.title = element_text(face = "bold"),
-      strip.text = element_text(face = "bold")
+      legend.title = element_text(face = "bold", color = PAL$text),
+      legend.text = element_text(color = PAL$text),
+      strip.text = element_text(face = "bold", color = PAL$accent)
     )
 }
 
@@ -136,6 +164,9 @@ plotlyize <- function(p, legend_bottom = TRUE) {
   gp <- ggplotly(p)
   gp <- layout(
     gp,
+    paper_bgcolor = PAL$panel,
+    plot_bgcolor = PAL$panel,
+    font = list(color = PAL$text),
     margin = list(l = 70, r = 30, t = 50, b = if (legend_bottom) 110 else 70),
     legend = if (legend_bottom) {
       list(orientation = "h", x = 0.5, xanchor = "center",
@@ -272,18 +303,187 @@ sidebar <- dashboardSidebar(
 )
 
 body <- dashboardBody(
-  tags$head(tags$style(HTML("
-    .content-wrapper { background-color: #F4F6F9; }
-    .small-box { border-radius: 10px; }
-    .box { border-radius: 10px; border-top: 3px solid #2C7FB8; }
-    .disclaimer-bar {
-      background: #FFF4E5; border: 1px solid #F0C36D; color: #7A4E00;
-      padding: 8px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 13px;
+  tags$head(
+    # BlazePod fonts: Orbitron (display) + Exo 2 (body).
+    tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
+    tags$link(rel = "preconnect", href = "https://fonts.gstatic.com",
+              crossorigin = NA),
+    tags$link(rel = "stylesheet", href = paste0(
+      "https://fonts.googleapis.com/css2?",
+      "family=Orbitron:wght@400;700;900&family=Exo+2:wght@300;400;600;700&display=swap"
+    )),
+    tags$style(HTML("
+    /* ===== TRON THEME (Virtual BlazePod aesthetic) ===================== */
+    :root {
+      --clr-bg:      #050810;
+      --clr-bg2:     #0a0f1e;
+      --clr-surface: #0d1526;
+      --clr-surface2:#111d35;
+      --clr-primary: #ff6b00;   /* neon orange */
+      --clr-cyan:    #00e5ff;    /* neon cyan  */
+      --clr-text:    #e8eaf0;
+      --clr-muted:   #6b7a99;
+      --clr-line:    rgba(0,229,255,0.18);
+      --glow-orange: 0 0 12px rgba(255,107,0,0.6), 0 0 30px rgba(255,107,0,0.25);
+      --glow-cyan:   0 0 12px rgba(0,229,255,0.5), 0 0 28px rgba(0,229,255,0.2);
+      --font-tron:   'Orbitron', monospace;
+      --font-body:   'Exo 2', system-ui, sans-serif;
     }
-    .edu-card { background: #fff; border-radius: 10px; padding: 16px 20px;
-      margin-bottom: 14px; border-left: 4px solid #6A51A3; }
-    .metric-note { color: #667; font-size: 12px; }
-    .live-status { font-weight: 600; }
+
+    body, .content-wrapper, .right-side, .wrapper {
+      background-color: var(--clr-bg) !important;
+      color: var(--clr-text);
+      font-family: var(--font-body);
+    }
+    /* Decorative Tron grid behind the content */
+    .content-wrapper {
+      background-image:
+        linear-gradient(rgba(0,229,255,0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,229,255,0.05) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+
+    /* Header / logo bar */
+    .main-header .logo {
+      font-family: var(--font-tron); font-weight: 900; letter-spacing: 0.06em;
+      background: var(--clr-bg2) !important; color: var(--clr-cyan) !important;
+      text-shadow: var(--glow-cyan); border-bottom: 1px solid var(--clr-line);
+    }
+    .main-header .navbar { background: var(--clr-bg2) !important;
+      border-bottom: 1px solid var(--clr-line); }
+    .main-header .sidebar-toggle { color: var(--clr-cyan) !important; }
+
+    /* Sidebar */
+    .main-sidebar, .left-side {
+      background: var(--clr-bg2) !important;
+      border-right: 1px solid var(--clr-line);
+    }
+    .sidebar-menu > li > a {
+      font-family: var(--font-tron); font-size: 12px; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--clr-muted) !important;
+    }
+    .sidebar-menu > li.active > a, .sidebar-menu > li:hover > a {
+      color: var(--clr-cyan) !important;
+      background: rgba(0,229,255,0.06) !important;
+      border-left: 3px solid var(--clr-primary) !important;
+    }
+    .sidebar-menu > li > a > .fa,
+    .sidebar-menu > li > a > .fas,
+    .sidebar-menu > li > a > .far { color: var(--clr-primary); }
+
+    /* Boxes */
+    .box {
+      background: var(--clr-surface); color: var(--clr-text);
+      border-radius: 10px; border: 1px solid var(--clr-line);
+      border-top: 2px solid var(--clr-primary);
+      box-shadow: 0 0 22px -14px var(--glow-cyan);
+    }
+    .box-header .box-title {
+      font-family: var(--font-tron); font-size: 13px; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--clr-cyan);
+    }
+    .box.box-solid.box-primary > .box-header,
+    .box.box-solid.box-info > .box-header,
+    .box.box-solid.box-warning > .box-header {
+      background: linear-gradient(180deg, rgba(0,229,255,0.08), transparent);
+      color: var(--clr-cyan);
+      border-bottom: 1px solid var(--clr-line);
+    }
+    .box.box-solid.box-primary, .box.box-solid.box-info,
+    .box.box-solid.box-warning {
+      border: 1px solid var(--clr-line);
+      border-top: 2px solid var(--clr-primary);
+    }
+
+    /* Value boxes (KPI cards) — override all shinydashboard colour variants */
+    .small-box {
+      border-radius: 10px; border: 1px solid var(--clr-line);
+      background: var(--clr-surface) !important;
+      box-shadow: 0 0 20px -12px var(--glow-cyan);
+      overflow: hidden;
+    }
+    .small-box > .inner h3 {
+      font-family: var(--font-tron); font-weight: 700; color: var(--clr-text);
+      text-shadow: 0 0 10px rgba(0,229,255,0.25);
+    }
+    .small-box > .inner p {
+      font-family: var(--font-tron); font-size: 11px; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--clr-muted);
+    }
+    .small-box .icon { color: rgba(0,229,255,0.25) !important; }
+    /* Accent stripe colour per semantic value-box class */
+    .small-box.bg-aqua, .small-box.bg-blue, .small-box.bg-light-blue,
+    .small-box.bg-navy, .small-box.bg-teal { border-top: 2px solid var(--clr-cyan); }
+    .small-box.bg-aqua .inner h3, .small-box.bg-blue .inner h3,
+    .small-box.bg-light-blue .inner h3, .small-box.bg-navy .inner h3,
+    .small-box.bg-teal .inner h3 { color: var(--clr-cyan); }
+    .small-box.bg-green .inner h3 { color: #00e676; }
+    .small-box.bg-green { border-top: 2px solid #00e676; }
+    .small-box.bg-yellow .inner h3, .small-box.bg-orange .inner h3 { color: var(--clr-primary); }
+    .small-box.bg-yellow, .small-box.bg-orange { border-top: 2px solid var(--clr-primary); }
+    .small-box.bg-purple .inner h3 { color: var(--clr-cyan); }
+    .small-box.bg-purple { border-top: 2px solid var(--clr-cyan); }
+
+    /* Tables (DT) */
+    .dataTables_wrapper { color: var(--clr-text); }
+    table.dataTable { color: var(--clr-text); }
+    table.dataTable thead th {
+      font-family: var(--font-tron); font-size: 11px; letter-spacing: 0.05em;
+      text-transform: uppercase; color: var(--clr-cyan);
+      border-bottom: 1px solid var(--clr-line);
+    }
+    table.dataTable tbody td { border-top: 1px solid rgba(0,229,255,0.08); }
+    table.dataTable.stripe tbody tr.odd { background: rgba(0,229,255,0.03); }
+    .dataTables_wrapper .dataTables_paginate .paginate_button {
+      color: var(--clr-cyan) !important;
+    }
+    .dataTables_filter input, .dataTables_length select {
+      background: var(--clr-surface2); color: var(--clr-text);
+      border: 1px solid var(--clr-line); border-radius: 4px;
+    }
+
+    /* Plain tables (renderTable) */
+    .table { color: var(--clr-text); }
+    .table > thead > tr > th { color: var(--clr-cyan); border-color: var(--clr-line); }
+    .table > tbody > tr > td { border-color: rgba(0,229,255,0.08); }
+    verbatim, pre {
+      background: var(--clr-bg2) !important; color: var(--clr-text) !important;
+      border: 1px solid var(--clr-line) !important; border-radius: 6px;
+    }
+
+    /* Inputs / selectors / switches */
+    .form-control, .selectize-input, .selectize-dropdown {
+      background: var(--clr-surface2) !important; color: var(--clr-text) !important;
+      border: 1px solid var(--clr-line) !important; border-radius: 6px;
+    }
+    .selectize-input.focus { border-color: var(--clr-primary) !important;
+      box-shadow: 0 0 0 2px rgba(255,107,0,0.25) !important; }
+    .irs-bar, .irs-single { background: var(--clr-primary) !important; }
+    .btn-primary, .bttn-primary {
+      background: var(--clr-primary) !important; border-color: var(--clr-primary) !important;
+      color: #050810 !important; font-family: var(--font-tron);
+      text-transform: uppercase; letter-spacing: 0.08em;
+      box-shadow: var(--glow-orange);
+    }
+
+    /* Disclaimer + educational cards */
+    .disclaimer-bar {
+      background: rgba(58,0,0,0.85); border: 1px solid #ff3333; color: #ffaaaa;
+      padding: 9px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 13px;
+      box-shadow: 0 0 16px -6px rgba(255,51,51,0.5);
+    }
+    .disclaimer-bar b, .disclaimer-bar strong { color: #ff6a6a; }
+    .edu-card {
+      background: var(--clr-surface); border-radius: 10px; padding: 16px 20px;
+      margin-bottom: 14px; border-left: 4px solid var(--clr-primary);
+      border-top: 1px solid var(--clr-line); border-right: 1px solid var(--clr-line);
+      border-bottom: 1px solid var(--clr-line); color: var(--clr-text);
+    }
+    .edu-card b { color: var(--clr-cyan); }
+    .metric-note { color: var(--clr-muted); font-size: 12px; }
+    .live-status { font-family: var(--font-tron); font-size: 12px;
+      letter-spacing: 0.05em; color: var(--clr-cyan); }
+    h2, h3, h4 { color: var(--clr-text); }
   "))),
 
   div(class = "disclaimer-bar",
@@ -510,7 +710,7 @@ body <- dashboardBody(
   )
 )
 
-ui <- dashboardPage(header, sidebar, body, skin = "blue")
+ui <- dashboardPage(header, sidebar, body, skin = "black")
 
 # =============================================================================
 # SERVER
@@ -662,9 +862,13 @@ server <- function(input, output, session) {
       datatable(rownames = FALSE, options = list(pageLength = 8, dom = "tp"),
                 class = "compact stripe hover") %>%
       formatStyle("Indicator",
+        color = styleEqual(
+          c("symmetric", "asymmetric", "insufficient"),
+          c("#00e676", "#ff6b00", "#6b7a99")),
+        fontWeight = "bold",
         backgroundColor = styleEqual(
           c("symmetric", "asymmetric", "insufficient"),
-          c("#E5F5E0", "#FEE0D2", "#F0F0F0")))
+          c("rgba(0,230,118,0.12)", "rgba(255,107,0,0.12)", "rgba(107,122,153,0.12)")))
   })
 
   output$live_timeline <- renderPlotly({
@@ -685,8 +889,12 @@ server <- function(input, output, session) {
     validate(need(nrow(d) > 0, "No data yet."))
     tab <- d %>% dplyr::count(indicator)
     plot_ly(tab, labels = ~indicator, values = ~n, type = "pie", hole = 0.55,
-            marker = list(colors = c("#FEE0D2", "#F0F0F0", "#E5F5E0", "#DADAEB"))) %>%
+            marker = list(
+              colors = c("#ff6b00", "#6b7a99", "#00e676", "#00e5ff"),
+              line = list(color = "#0d1526", width = 2))) %>%
       layout(showlegend = TRUE,
+             paper_bgcolor = "#0d1526", plot_bgcolor = "#0d1526",
+             font = list(color = "#e8eaf0"),
              legend = list(orientation = "h", x = 0.5, xanchor = "center",
                            y = -0.1, yanchor = "top"),
              margin = list(l = 20, r = 20, t = 20, b = 60)) %>%
@@ -796,7 +1004,8 @@ server <- function(input, output, session) {
     long <- purrr_map_metrics(d, names(METRICS), METRICS)
     validate(need(nrow(long) > 0, "No values to plot."))
     ggplot(long, aes(value, fill = Eye)) +
-      geom_histogram(bins = 18, alpha = 0.6, position = "identity", color = "white") +
+      geom_histogram(bins = 18, alpha = 0.6, position = "identity",
+                     color = "#0d1526") +
       facet_wrap(~ metric_label, scales = "free", ncol = 3) +
       scale_fill_manual(values = c(Right = PAL$right, Left = PAL$left)) +
       labs(x = NULL, y = "Count", fill = "Eye",
@@ -841,7 +1050,7 @@ server <- function(input, output, session) {
     validate(need(nrow(dd) > 0, "Need sessions with both eyes measured."))
     lim <- range(c(dd[[rc]], dd[[lc]]), na.rm = TRUE)
     p <- ggplot(dd, aes(.data[[rc]], .data[[lc]], color = indicator)) +
-      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "#6b7a99") +
       geom_point(size = 2.4, alpha = 0.8) +
       scale_color_manual(values = c(symmetric = PAL$symmetric,
         asymmetric = PAL$asymmetric, insufficient = PAL$insufficient,
@@ -954,9 +1163,9 @@ server <- function(input, output, session) {
     df <- as.data.frame(as.table(cm))
     names(df) <- c("Var1", "Var2", "r")
     ggplot(df, aes(Var1, Var2, fill = r)) +
-      geom_tile(color = "white") +
-      geom_text(aes(label = sprintf("%.2f", r)), size = 3) +
-      scale_fill_gradient2(low = PAL$left, mid = "white", high = PAL$right,
+      geom_tile(color = "#0a0f1e") +
+      geom_text(aes(label = sprintf("%.2f", r)), size = 3, color = "#e8eaf0") +
+      scale_fill_gradient2(low = PAL$left, mid = "#0d1526", high = PAL$right,
                            midpoint = 0, limits = c(-1, 1)) +
       labs(x = NULL, y = NULL, fill = "Pearson r",
            title = "Correlation matrix of numeric PLR metrics") +
@@ -972,7 +1181,7 @@ server <- function(input, output, session) {
     d <- data_f() %>% dplyr::filter(!is.na(age))
     validate(need(nrow(d) > 0, "No age data yet."))
     p <- ggplot(d, aes(age)) +
-      geom_histogram(bins = 15, fill = PAL$accent, alpha = 0.85, color = "white") +
+      geom_histogram(bins = 15, fill = PAL$accent, alpha = 0.85, color = "#0d1526") +
       labs(x = "Age (years)", y = "Sessions") + theme_plr()
     plotlyize(p, legend_bottom = FALSE)
   })
@@ -996,7 +1205,8 @@ server <- function(input, output, session) {
     validate(need(nrow(d) >= 3, "Need at least 3 sessions with age + constriction."))
     p <- ggplot(d, aes(age, meanCon)) +
       geom_point(color = PAL$right, size = 2.4, alpha = 0.8) +
-      geom_smooth(method = "lm", se = TRUE, color = PAL$asymmetric, fill = "#FDD") +
+      geom_smooth(method = "lm", se = TRUE, color = PAL$accent2,
+                  fill = "#ff6b00", alpha = 0.15) +
       labs(x = "Age (years)", y = "Mean % constriction (both eyes)") + theme_plr()
     plotlyize(p, legend_bottom = FALSE)
   })

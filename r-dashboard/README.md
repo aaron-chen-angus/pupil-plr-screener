@@ -16,6 +16,12 @@ the shared results Google Sheet on an anonymous, read-only basis, so it can be
 opened directly in a browser with no R installation. The instructions below are
 for running or redeploying it locally.
 
+The interface uses the **"TRON" visual theme** shared with the Virtual BlazePod
+suite: a deep space-black canvas with a faint cyan grid, neon orange + cyan
+accents, glowing panels, and the Orbitron (headings) / Exo 2 (body) type pairing.
+This is purely cosmetic — the data pipeline, statistics, and layout are
+unchanged. The two Google Fonts load over HTTPS at runtime.
+
 > ⚠️ **Not a medical device.** Screening / teaching demonstrator only. Nothing in
 > this dashboard is a diagnosis or a clinically validated cutoff. All values are
 > illustrative; the asymmetry threshold is an unvalidated screening parameter.
